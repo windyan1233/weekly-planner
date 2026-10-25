@@ -125,6 +125,7 @@
     .card p { color: var(--muted); font-size: 14px; margin: 10px 0 16px; flex: 1; }
     .card .btn { width: 100%; }
     .small { font-size: 12px; color: #7f8aa0; margin: 10px 0 0; }
+    .inline-link { display: block; margin-top: 8px; font-size: 12px; color: var(--accent); text-align: center; }
     .note {
       margin-top: 14px; padding: 12px 14px; border: 1px solid #3a4960; border-radius: 10px;
       background: #141b28; color: var(--muted); font-size: 13px;
@@ -252,6 +253,7 @@
           <p>下载 zip，解压后运行 <code>WeeklyPlanner.exe</code>。数据保存在 <code>%APPDATA%\WeeklyPlanner</code>，升级不会丢。</p>
           <a class="btn" data-dl="windows" href="https://github.com/windyan1233/weekly-planner/releases/latest">下载 Windows 包</a>
           <p class="small">zip · 约 61 MB · 未签名，SmartScreen 可能提示未知发布者</p>
+          <a class="inline-link" data-dl="windows-custom" href="https://github.com/windyan1233/weekly-planner/releases/latest">或用「自定义分类版」：可添加/改名/隐藏支出分类</a>
         </div>
         <div class="card">
           <div class="card-head"><h3>Android</h3><span class="pill">1.0.14</span></div>
@@ -354,6 +356,7 @@
         };
         wire('[data-dl="android"]', pick((n) => n.toLowerCase().endsWith('.apk')));
         wire('[data-dl="windows"]', pick((n) => n.toLowerCase().endsWith('-windows.zip')));
+        wire('[data-dl="windows-custom"]', pick((n) => n.toLowerCase().endsWith('-windows-custom.zip')));
       } catch (e) {
         /* 离线或 API 限流时保持默认链接到 Releases 页面 */
       }
