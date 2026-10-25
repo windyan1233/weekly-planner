@@ -131,6 +131,16 @@
       margin-top: 14px; padding: 12px 14px; border: 1px solid #3a4960; border-radius: 10px;
       background: #141b28; color: var(--muted); font-size: 13px;
     }
+    .mirror {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px;
+      margin-bottom: 14px; padding: 14px 16px;
+      border: 1px solid #3a5a4a; border-radius: 12px;
+      background: linear-gradient(135deg, #14231c, #141b28);
+    }
+    .mirror strong { display: block; font-size: 15px; color: var(--green); }
+    .mirror span { color: var(--muted); font-size: 12px; }
+    .mirror .btn { margin-left: auto; }
+    .mirror code { color: var(--green); }
 
     /* 功能 */
     .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
@@ -200,8 +210,8 @@
         <h1>把一周安排清楚，<br /><span>把每一笔账记明白。</span></h1>
         <p class="lead">纯本地周计划 + 记账工具。日程、课表、提醒、记账、月报都在本机，不联网、不登录、不收集数据。</p>
         <div class="actions">
-          <a class="btn primary" href="#download">下载最新版</a>
-          <a class="btn ghost" href="https://github.com/windyan1233/weekly-planner">查看源码</a>
+          <a class="btn primary" href="https://wwaxi.lanzoub.com/b01i5y69id" target="_blank" rel="noopener">国内下载</a>
+          <a class="btn ghost" href="#download">其他下载方式</a>
         </div>
         <div class="badges">
           <span class="badge">无 INTERNET 权限</span>
@@ -250,21 +260,30 @@
     <section id="download">
       <div class="section-title">
         <h2>下载</h2>
-        <p>最新版本 <span id="latest-version">v1.0.15</span> · 全部版本在 GitHub Releases</p>
+        <p>最新版本 <span id="latest-version">v1.0.15</span> · 国内蓝奏云 / GitHub</p>
+      </div>
+      <div class="mirror">
+        <div>
+          <strong>国内下载（推荐）</strong>
+          <span>蓝奏云文件夹 · 密码 <code>9s8z</code> · GitHub 打不开时用这个</span>
+        </div>
+        <a class="btn primary" href="https://wwaxi.lanzoub.com/b01i5y69id" target="_blank" rel="noopener">打开蓝奏云</a>
       </div>
       <div class="download-grid">
         <div class="card">
-          <div class="card-head"><h3>Windows</h3><span class="pill">1.0.3</span></div>
+          <div class="card-head"><h3>Windows</h3><span class="pill">1.0.4</span></div>
           <p>下载 zip，解压后运行 <code>WeeklyPlanner.exe</code>。数据保存在 <code>%APPDATA%\WeeklyPlanner</code>，升级不会丢。</p>
-          <a class="btn" data-dl="windows" href="https://github.com/windyan1233/weekly-planner/releases/latest">下载 Windows 包</a>
-          <p class="small">zip · 约 62 MB · 未签名，SmartScreen 可能提示未知发布者</p>
-          <a class="inline-link" data-dl="windows-custom" href="https://github.com/windyan1233/weekly-planner/releases/latest">或用「自定义分类版」：可添加/改名/隐藏支出分类</a>
+          <a class="btn primary" href="https://wwaxi.lanzoub.com/b01i5y69id" target="_blank" rel="noopener">国内下载 Windows</a>
+          <p class="small">蓝奏云文件夹 · 密码 9s8z · zip 约 62 MB</p>
+          <a class="inline-link" data-gh="windows" href="https://github.com/windyan1233/weekly-planner/releases/latest">GitHub 直链（备用）</a>
+          <a class="inline-link" href="https://wwaxi.lanzoub.com/b01i5y69id" target="_blank" rel="noopener">或用「自定义分类版」：同一文件夹内</a>
         </div>
         <div class="card">
           <div class="card-head"><h3>Android</h3><span class="pill">1.0.15</span></div>
           <p>下载 APK，允许「未知来源」后安装。不申请 INTERNET 权限，数据只在本机，可直接覆盖旧版本。</p>
-          <a class="btn" data-dl="android" href="https://github.com/windyan1233/weekly-planner/releases/latest">下载 Android APK</a>
-          <p class="small">APK · 约 11 MB · release 签名</p>
+          <a class="btn primary" href="https://wwaxi.lanzoub.com/b01i5y69id" target="_blank" rel="noopener">国内下载 Android</a>
+          <p class="small">蓝奏云文件夹 · 密码 9s8z · APK 约 11 MB</p>
+          <a class="inline-link" data-gh="android" href="https://github.com/windyan1233/weekly-planner/releases/latest">GitHub 直链（备用）</a>
         </div>
       </div>
       <div class="note">
@@ -360,9 +379,8 @@
             el.removeAttribute('target');
           }
         };
-        wire('[data-dl="android"]', pick((n) => n.toLowerCase().endsWith('.apk')));
-        wire('[data-dl="windows"]', pick((n) => n.toLowerCase().endsWith('-windows.zip')));
-        wire('[data-dl="windows-custom"]', pick((n) => n.toLowerCase().endsWith('-windows-custom.zip')));
+        wire('[data-gh="android"]', pick((n) => n.toLowerCase().endsWith('.apk')));
+        wire('[data-gh="windows"]', pick((n) => n.toLowerCase().endsWith('-windows.zip')));
       } catch (e) {
         /* 离线或 API 限流时保持默认链接到 Releases 页面 */
       }

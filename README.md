@@ -3,6 +3,7 @@
 一个**纯本地**的周计划 + 记账工具，包含 Windows 和 Android 两端。
 
 > 下载页：https://windyan1233.github.io/weekly-planner/
+> 国内下载（蓝奏云）：https://wwaxi.lanzoub.com/b01i5y69id 密码 `9s8z`（GitHub 打不开时用）
 
 - 日程：周视图、多计划时间、截止时间、分类/优先级、课程表；
 - 提醒：截止前一天、计划前 N 分钟、稍后提醒、错过补发；
