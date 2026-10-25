@@ -195,6 +195,15 @@ class MainWindow(QMainWindow):
 
         layout.addStretch(1)
 
+        self.help_button = QPushButton("?")
+        self.help_button.setObjectName("IconButton")
+        self.help_button.setFixedSize(34, 32)
+        self.help_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.help_button.setToolTip("使用说明")
+        self.help_button.setStyleSheet("font-size: 15px;")
+        self.help_button.clicked.connect(self.open_help)
+        layout.addWidget(self.help_button)
+
         self.theme_button = QPushButton("◐")
         self.theme_button.setObjectName("IconButton")
         self.theme_button.setFixedSize(34, 32)
@@ -856,6 +865,11 @@ class MainWindow(QMainWindow):
         if not any(day in visible for day in dates):
             self._navigate(start_of_week(dates[0]), follow=start_of_week(dates[0]) == start_of_week(self._today))
         self.open_task(task_id)
+
+    def open_help(self) -> None:
+        from .help_dialog import HelpDialog
+
+        HelpDialog(self).exec()
 
     def open_settings(self) -> None:
         from .settings_dialog import SettingsDialog
