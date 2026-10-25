@@ -100,6 +100,8 @@ keyPassword=***
 
 ## 文档
 
+- [Windows 使用说明](docs/使用说明-Windows.md) · [PDF](docs/使用说明-Windows.pdf)
+- [Android 使用说明](docs/使用说明-Android.md) · [PDF](docs/使用说明-Android.pdf)
 - [双端功能与互通说明](docs/一周日程-双端功能与互通说明.md)
 - [JSON 格式摘要](docs/exchange-format.md)
 - [隐私清理记录](docs/PRIVACY-AUDIT.md)
