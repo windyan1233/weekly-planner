@@ -13,7 +13,7 @@ from pathlib import Path
 
 APP_NAME = "WeeklyPlanner"
 APP_DISPLAY_NAME = "一周日程"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 APP_AUMID = "WeeklyPlanner.Desktop"          # Windows 通知标识
 APP_REGISTRY_NAME = "WeeklyPlanner"          # 开机启动注册表值名
 PROTOCOL_SCHEME = "weeklyplanner"            # 通知按钮跳转协议
