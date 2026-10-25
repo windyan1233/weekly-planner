@@ -24,6 +24,8 @@
   - https://jexcelapi.sourceforge.net/
 - **Material Icons** — Apache-2.0
   - https://fonts.google.com/icons
+- **Gradle wrapper** — Apache-2.0（仅构建工具）
+  - https://gradle.org/
 
 ## 说明
 
