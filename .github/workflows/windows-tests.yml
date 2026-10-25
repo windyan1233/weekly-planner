@@ -13,6 +13,9 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
     defaults:
       run:
         working-directory: windows
