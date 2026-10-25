@@ -12,11 +12,11 @@
 
 ## 代码签名
 
-Windows 版本的安装包使用 **SignPath Foundation** 提供的免费开源代码签名：
+Windows 版本正在申请 **SignPath Foundation** 的免费开源代码签名：
 
 https://signpath.org/
 
-签名后的发布者显示为 SignPath Foundation，代表该二进制由本仓库的公开构建流程生成。
+当前 Windows 发布包**尚未签名**，SmartScreen 可能提示「未知发布者」；签名通过后会发布新的签名版本，已发布的旧包不会被静默替换。
 
 ## 校验
 
