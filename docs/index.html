@@ -137,10 +137,27 @@
       border: 1px solid #3a5a4a; border-radius: 12px;
       background: linear-gradient(135deg, #14231c, #141b28);
     }
+    .mirror-text { min-width: 240px; }
     .mirror strong { display: block; font-size: 15px; color: var(--green); }
     .mirror span { color: var(--muted); font-size: 12px; }
     .mirror .btn { margin-left: auto; }
     .mirror code { color: var(--green); }
+    .pass-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+    .pass-label { font-size: 12px; color: var(--muted); }
+    .pass-code {
+      display: inline-block; padding: 4px 12px;
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 24px; font-weight: 700; letter-spacing: 3px;
+      color: #0f1218; background: var(--green); border-radius: 7px;
+      cursor: pointer; user-select: all;
+    }
+    .copy-btn {
+      padding: 5px 10px; border-radius: 7px; cursor: pointer;
+      border: 1px solid #3a5a4a; background: #1a2a22; color: var(--green);
+      font-size: 12px;
+    }
+    .copy-btn:hover { filter: brightness(1.15); }
+    .pass-inline { color: var(--green); font-size: 14px; letter-spacing: 1px; }
 
     /* 功能 */
     .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
@@ -263,9 +280,14 @@
         <p>最新版本 <span id="latest-version">v1.0.15</span> · 国内蓝奏云 / GitHub</p>
       </div>
       <div class="mirror">
-        <div>
+        <div class="mirror-text">
           <strong>国内下载（推荐）</strong>
-          <span>蓝奏云文件夹 · 密码 <code>9s8z</code> · GitHub 打不开时用这个</span>
+          <span>先复制密码，再打开蓝奏云；GitHub 打不开时用这个</span>
+          <div class="pass-row">
+            <span class="pass-label">提取密码</span>
+            <b class="pass-code" id="lanzou-password" title="点击复制">9s8z</b>
+            <button class="copy-btn" type="button" data-copy="9s8z">复制密码</button>
+          </div>
         </div>
         <a class="btn primary" href="https://wwaxi.lanzoub.com/b01i5y69id" target="_blank" rel="noopener">打开蓝奏云</a>
       </div>
@@ -274,7 +296,7 @@
           <div class="card-head"><h3>Windows</h3><span class="pill">1.0.4</span></div>
           <p>下载 zip，解压后运行 <code>WeeklyPlanner.exe</code>。数据保存在 <code>%APPDATA%\WeeklyPlanner</code>，升级不会丢。</p>
           <a class="btn primary" href="https://wwaxi.lanzoub.com/b01i5y69id" target="_blank" rel="noopener">国内下载 Windows</a>
-          <p class="small">蓝奏云文件夹 · 密码 9s8z · zip 约 62 MB</p>
+          <p class="small">蓝奏云文件夹 · 密码 <b class="pass-inline">9s8z</b> · zip 约 62 MB</p>
           <a class="inline-link" data-gh="windows" href="https://github.com/windyan1233/weekly-planner/releases/latest">GitHub 直链（备用）</a>
           <a class="inline-link" href="https://wwaxi.lanzoub.com/b01i5y69id" target="_blank" rel="noopener">或用「自定义分类版」：同一文件夹内</a>
         </div>
@@ -282,7 +304,7 @@
           <div class="card-head"><h3>Android</h3><span class="pill">1.0.15</span></div>
           <p>下载 APK，允许「未知来源」后安装。不申请 INTERNET 权限，数据只在本机，可直接覆盖旧版本。</p>
           <a class="btn primary" href="https://wwaxi.lanzoub.com/b01i5y69id" target="_blank" rel="noopener">国内下载 Android</a>
-          <p class="small">蓝奏云文件夹 · 密码 9s8z · APK 约 11 MB</p>
+          <p class="small">蓝奏云文件夹 · 密码 <b class="pass-inline">9s8z</b> · APK 约 11 MB</p>
           <a class="inline-link" data-gh="android" href="https://github.com/windyan1233/weekly-planner/releases/latest">GitHub 直链（备用）</a>
         </div>
       </div>
@@ -383,6 +405,45 @@
         wire('[data-gh="windows"]', pick((n) => n.toLowerCase().endsWith('-windows.zip')));
       } catch (e) {
         /* 离线或 API 限流时保持默认链接到 Releases 页面 */
+      }
+    })();
+
+    (function () {
+      const password = '9s8z';
+      async function copyText(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (e) {
+          const area = document.createElement('textarea');
+          area.value = text;
+          area.style.position = 'fixed';
+          area.style.opacity = '0';
+          document.body.appendChild(area);
+          area.select();
+          let ok = false;
+          try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+          area.remove();
+          return ok;
+        }
+      }
+      function bind(button) {
+        button.addEventListener('click', async () => {
+          const ok = await copyText(button.dataset.copy || password);
+          const original = button.dataset.label || button.textContent;
+          button.dataset.label = original;
+          button.textContent = ok ? '已复制' : '复制失败';
+          setTimeout(() => { button.textContent = original; }, 1600);
+        });
+      }
+      document.querySelectorAll('[data-copy]').forEach(bind);
+      const code = document.getElementById('lanzou-password');
+      if (code) {
+        code.addEventListener('click', async () => {
+          const ok = await copyText(password);
+          code.textContent = ok ? '已复制' : password;
+          setTimeout(() => { code.textContent = password; }, 1200);
+        });
       }
     })();
   </script>
