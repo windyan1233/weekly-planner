@@ -29,8 +29,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// TODO: 换成你自己的反馈邮箱，或改成 GitHub Issues 链接
-private const val AUTHOR_EMAIL = "your-email@example.com"
+// TODO: windyan1233@qq.com
+private const val AUTHOR_EMAIL = "windyan1233@qq.com"
 
 private val paragraphs = listOf(
     "大家好，我是这个项目的作者，目前是一名大一新生。",

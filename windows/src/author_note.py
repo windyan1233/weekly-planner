@@ -15,8 +15,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-# TODO: 换成你自己的反馈邮箱，或改成 GitHub Issues 链接
-AUTHOR_EMAIL = "your-email@example.com"
+# TODO: windyan1233@qq.com
+AUTHOR_EMAIL = "windyan1233@qq.com"
 
 AUTHOR_NOTE = (
     "大家好，我是这个项目的作者，目前是一名大一新生。",
