@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>一周日程 · 下载</title>
+  <meta name="description" content="一周日程：纯本地的周计划 + 记账工具，支持 Windows 和 Android。" />
+  <style>
+    :root {
+      --bg: #0f1218;
+      --card: #181c25;
+      --card-2: #1e2430;
+      --text: #eef2ff;
+      --muted: #aab3c5;
+      --accent: #9db1ff;
+      --line: #2a3140;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(900px 500px at 20% -10%, #1d2740 0%, var(--bg) 60%);
+      color: var(--text);
+      font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+      line-height: 1.7;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 42px 22px 60px; }
+    header { display: flex; align-items: center; gap: 14px; margin-bottom: 34px; }
+    .logo {
+      width: 48px; height: 48px; border-radius: 14px;
+      background: linear-gradient(135deg, #6f8cff, #9db1ff);
+      color: #101a3a; font-weight: 800; font-size: 24px;
+      display: grid; place-items: center;
+    }
+    h1 { font-size: 30px; margin: 0; letter-spacing: .5px; }
+    header p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+    .hero { margin: 8px 0 30px; }
+    .hero h2 { font-size: 22px; margin: 0 0 8px; }
+    .hero p { color: var(--muted); margin: 0 0 18px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 11px 20px; border-radius: 10px; text-decoration: none;
+      border: 1px solid var(--line); color: var(--text); background: var(--card);
+      font-size: 15px;
+    }
+    .btn.primary { background: var(--accent); color: #101a3a; border-color: transparent; font-weight: 700; }
+    .hint { font-size: 13px; color: var(--muted); margin-top: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 26px 0; }
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+      padding: 20px;
+    }
+    .card h3 { margin: 0 0 6px; font-size: 18px; }
+    .card p { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
+    .card .btn { width: 100%; }
+    .features { margin: 34px 0; }
+    .features h2, .docs h2 { font-size: 20px; margin: 0 0 12px; }
+    .features ul { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 18px; }
+    .features li { color: var(--muted); font-size: 14px; }
+    .features li::before { content: "·"; color: var(--accent); margin-right: 8px; }
+    .docs { border-top: 1px solid var(--line); padding-top: 22px; }
+    .docs a { color: var(--accent); text-decoration: none; display: block; margin: 6px 0; font-size: 14px; }
+    footer { margin-top: 36px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+    a:hover { filter: brightness(1.1); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo">一</div>
+      <div>
+        <h1>一周日程</h1>
+        <p>纯本地周计划 + 记账 · Windows / Android</p>
+      </div>
+    </header>
+
+    <section class="hero">
+      <h2>不联网、不登录、不收集数据</h2>
+      <p>日程、课表、提醒、记账、月报都在本机。需要换设备时用 JSON 手动导入导出。</p>
+      <div class="actions">
+        <a class="btn primary" href="https://github.com/windyan1233/weekly-planner/releases/latest">下载最新版</a>
+        <a class="btn" href="https://github.com/windyan1233/weekly-planner">查看源码</a>
+      </div>
+      <p class="hint">Windows 当前包未签名，SmartScreen 可能提示「未知发布者」；已申请 SignPath Foundation 免费开源签名，通过后会发布签名版本。</p>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h3>Windows</h3>
+        <p>下载 zip，解压后运行 <code>WeeklyPlanner.exe</code>。数据保存在 <code>%APPDATA%\WeeklyPlanner</code>。</p>
+        <a class="btn" href="https://github.com/windyan1233/weekly-planner/releases/latest">下载 Windows 包</a>
+      </div>
+      <div class="card">
+        <h3>Android</h3>
+        <p>下载 APK，允许「未知来源」后安装。不申请 INTERNET 权限，数据只在本机。</p>
+        <a class="btn" href="https://github.com/windyan1233/weekly-planner/releases/latest">下载 Android APK</a>
+      </div>
+    </section>
+
+    <section class="features">
+      <h2>功能</h2>
+      <ul>
+        <li>周视图 / 列表视图</li>
+        <li>一个任务多个计划时间</li>
+        <li>截止前一天提醒</li>
+        <li>课表导入（xls / xlsx / csv）</li>
+        <li>文字版 PDF 课表（Windows）</li>
+        <li>资金分区与转账</li>
+        <li>六类支出，可自定义</li>
+        <li>月度报表与结余结转</li>
+        <li>JSON 双端互通</li>
+        <li>MIT 开源</li>
+      </ul>
+    </section>
+
+    <section class="docs">
+      <h2>文档</h2>
+      <a href="https://github.com/windyan1233/weekly-planner/blob/main/docs/使用说明-Windows.md">Windows 使用说明</a>
+      <a href="https://github.com/windyan1233/weekly-planner/blob/main/docs/使用说明-Android.md">Android 使用说明</a>
+      <a href="https://github.com/windyan1233/weekly-planner/blob/main/docs/一周日程-双端功能与互通说明.md">双端功能与 JSON 互通</a>
+      <a href="https://github.com/windyan1233/weekly-planner/blob/main/docs/PRIVACY-AUDIT.md">隐私说明</a>
+    </section>
+
+    <footer>
+      一周日程 · MIT License · 数据只在本地
+    </footer>
+  </div>
+</body>
+</html>
