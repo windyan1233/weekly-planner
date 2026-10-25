@@ -37,6 +37,14 @@ docs/      功能说明、JSON 格式
 
 详细差异与限制见文档。
 
+## 下载与代码签名
+
+安装包发布在 [GitHub Releases](https://github.com/windyan1233/weekly-planner/releases)。
+
+Windows 版本计划使用 **SignPath Foundation** 提供的免费开源代码签名（https://signpath.org/），签名后的发布者显示为 SignPath Foundation。
+
+下载页与校验说明见 [docs/DOWNLOAD.md](docs/DOWNLOAD.md)。
+
 ## 构建
 
 ### Windows
