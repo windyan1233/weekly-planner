@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from . import config, windows_integration
 from .database import DatabaseError
 from .global_hotkey import DEFAULT_HOTKEY, HOTKEY_PRESETS, describe_error, parse_hotkey
+from .help_dialog import HelpDialog
 from .reminder_scheduler import ReminderEngine
 from .settings_store import SettingsStore, THEME_LABELS
 from .task_manager import PlannerService
@@ -305,6 +306,10 @@ class SettingsDialog(QDialog):
         )
         author_row = QHBoxLayout()
         author_row.setSpacing(8)
+        help_button = QPushButton("使用说明")
+        help_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        help_button.clicked.connect(self._show_help)
+        author_row.addWidget(help_button)
         author_button = QPushButton("作者的话")
         author_button.setCursor(Qt.CursorShape.PointingHandCursor)
         author_button.clicked.connect(self._show_author_note)
@@ -550,6 +555,9 @@ class SettingsDialog(QDialog):
             + (f"\n跳过 {result['skipped']} 行（缺少名称或时间）。" if result["skipped"] else ""),
         )
         self.settings_changed.emit()
+
+    def _show_help(self) -> None:
+        HelpDialog(self).exec()
 
     def _show_author_note(self) -> None:
         from .author_note import AuthorNoteDialog

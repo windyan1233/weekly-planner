@@ -87,6 +87,7 @@ fun ProfileScreen(
     var importText by remember { mutableStateOf<String?>(null) }
     var confirmClearCourses by remember { mutableStateOf(false) }
     var showAuthorNote by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(false) }
     var showCategoryDialog by remember { mutableStateOf(false) }
     var editingCategory by remember { mutableStateOf<Category?>(null) }
     var categoryName by remember { mutableStateOf("") }
@@ -362,6 +363,7 @@ fun ProfileScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                TextButton(onClick = { showHelp = true }) { Text("课表导入 / 导出说明") }
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(onClick = onOpenCourseImport, modifier = Modifier.weight(1f)) {
@@ -414,8 +416,13 @@ fun ProfileScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = { showAuthorNote = true }) {
-                    Text("作者的话")
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = { showHelp = true }) {
+                        Text("使用说明")
+                    }
+                    OutlinedButton(onClick = { showAuthorNote = true }) {
+                        Text("作者的话")
+                    }
                 }
             }
         }
@@ -423,6 +430,10 @@ fun ProfileScreen(
 
     if (showAuthorNote) {
         AuthorNoteSheet(onDismiss = { showAuthorNote = false })
+    }
+
+    if (showHelp) {
+        HelpSheet(onDismiss = { showHelp = false })
     }
 
     if (showAddAccount) {
