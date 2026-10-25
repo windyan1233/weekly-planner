@@ -2,8 +2,8 @@
 # PyInstaller 版本资源：资源管理器「属性 → 详细信息」里显示的信息
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 0, 0),
-    prodvers=(1, 0, 0, 0),
+    filevers=(1, 0, 2, 0),
+    prodvers=(1, 0, 2, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -19,12 +19,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', '一周日程 · Weekly Planner'),
             StringStruct('FileDescription', '一周日程 - 个人周视图日程表'),
-            StringStruct('FileVersion', '1.0.0.0'),
+            StringStruct('FileVersion', '1.0.2.0'),
             StringStruct('InternalName', 'WeeklyPlanner'),
             StringStruct('LegalCopyright', '本地个人使用，数据仅保存在本机'),
             StringStruct('OriginalFilename', 'WeeklyPlanner.exe'),
             StringStruct('ProductName', '一周日程'),
-            StringStruct('ProductVersion', '1.0.0.0'),
+            StringStruct('ProductVersion', '1.0.2.0'),
           ],
         )
       ]
