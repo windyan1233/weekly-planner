@@ -112,7 +112,7 @@ keyPassword=***
 
 - [Windows 使用说明](docs/使用说明-Windows.md) · [PDF](docs/使用说明-Windows.pdf)
 - [Android 使用说明](docs/使用说明-Android.md) · [PDF](docs/使用说明-Android.pdf)
-- [课表只有「打印」键怎么导出](docs/课表导出指南.md) · [PDF](docs/课表导出指南.pdf)
+- [课表导出指南：导出键 / 打印键](docs/课表导出指南.md) · [PDF](docs/课表导出指南.pdf)
 - [课表 CSV 模板](docs/课表模板.csv)
 - [双端功能与互通说明](docs/一周日程-双端功能与互通说明.md)
 - [JSON 格式摘要](docs/exchange-format.md)
