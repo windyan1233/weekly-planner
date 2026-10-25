@@ -1,0 +1,28 @@
+name: android-tests
+
+on:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-tests.yml"
+  pull_request:
+    paths:
+      - "android/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Run unit tests
+        run: |
+          chmod +x gradlew
+          ./gradlew test

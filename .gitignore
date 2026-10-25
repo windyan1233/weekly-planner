@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# 本地数据/备份（绝不能提交）
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+.testdata/
+backups/
+planner.before-*.db
+
+# 构建产物
+build/
+dist/
+发布/
+*.zip
+*.apk
+*.aab
+*.exe
+*.msi
+
+# Windows 签名/证书
+*.pfx
+*.p12
+*.cer
+*.crt
+signing/
+
+# Android
+.gradle/
+.kotlin/
+app/build/
+local.properties
+keystore.properties
+*.jks
+*.keystore
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 文档生成中间产物
+*.html.tmp
