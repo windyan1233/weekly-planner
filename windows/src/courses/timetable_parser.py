@@ -46,11 +46,14 @@ _WEEKDAYS_LABEL = ("一", "二", "三", "四", "五", "六", "日")
 
 _TIME_RE = re.compile(r"(\d{1,2})\s*[:：]\s*(\d{2})\s*[-–~]\s*(\d{1,2})\s*[:：]\s*(\d{2})")
 _PERIODS_RE = re.compile(r"[\(（]\s*(\d{1,2})\s*[,，、]\s*(\d{1,2})\s*[\)）]")
+_PERIODS_ALT_RE = re.compile(r"第\s*(\d{1,2})\s*[-–－~]\s*(\d{1,2})\s*节")
 _BIG_SECTION_RE = re.compile(r"第([一二三四五六七八九十]+)大节")
 _SCHEDULE_RE = re.compile(
     r"^(?P<weeks>[^()（）\[\]]+?)\s*[\(（]?\s*\[?\s*周\s*\]?\s*[\)）]?\s*"
-    r"\[(?P<periods>[0-9\-－,，]+)\s*节\]$"
+    r"\[(?P<periods>[0-9\-－,，]+)\s*节?\]\s*节?$"
 )
+_WEEK_ONLY_RE = re.compile(r"^\s*[\d,，、\-–－~]+\s*[\(（]?\s*\[?\s*周\s*\]?\s*[\)）]?\s*$")
+_PERIOD_ONLY_RE = re.compile(r"^\s*\[\s*[\d\-－,，]+\s*节?\]\s*节?\s*$")
 
 
 class ParseError(Exception):
@@ -164,7 +167,7 @@ def _parse_big_sections(rows: list[list[str]]) -> tuple[list[BigSection], int, b
         first = (row[0] if row else "").strip()
         if not first:
             continue
-        periods_match = _PERIODS_RE.search(first)
+        periods_match = _PERIODS_RE.search(first) or _PERIODS_ALT_RE.search(first)
         if not periods_match:
             continue
         periods = (int(periods_match.group(1)), int(periods_match.group(2)))
@@ -192,7 +195,7 @@ def _parse_big_sections(rows: list[list[str]]) -> tuple[list[BigSection], int, b
             )
         )
     if not sections:
-        raise ParseError("没有找到「第一大节 (01,02)」这样的作息行。")
+        raise ParseError("没有找到「第一大节 (01,02)」或「第1~2节」这样的作息行。")
     return sections, header_row, has_times
 
 
@@ -230,6 +233,26 @@ def parse_periods(text: str) -> tuple[int, ...]:
     return tuple(
         int(part) for part in re.split(r"[-－–,，、]", text or "") if part.strip().isdigit()
     )
+
+
+def _merge_split_schedule(cell: str) -> str:
+    """把「1-16[周]」和下一行的「[01-02]节」合成一行。
+
+    曲阜师范大学等教务系统会把周次和节次拆成两行；其余格式不变。
+    """
+    lines = cell.splitlines()
+    for index, line in enumerate(lines):
+        if not _PERIOD_ONLY_RE.match(line):
+            continue
+        for previous in range(index - 1, -1, -1):
+            candidate = lines[previous]
+            if not candidate.strip():
+                break
+            if _WEEK_ONLY_RE.match(candidate):
+                lines[previous] = candidate.rstrip() + line.strip()
+                lines[index] = ""
+                break
+    return "\n".join(lines)
 
 
 def _parse_entry(block: str, weekday: int, time_map: dict[int, tuple[int, int]]) -> ParsedCourse | None:
@@ -315,6 +338,7 @@ def parse_timetable(rows: list[list[str]]) -> ParseResult:
             cell = row[column] or ""
             if not cell.strip():
                 continue
+            cell = _merge_split_schedule(cell)
             # 空行分隔课程；老师为空时课程名与作息行之间也会多一个空行
             pending: list[str] = []
             for block in re.split(r"\n\s*\n", cell.strip()):

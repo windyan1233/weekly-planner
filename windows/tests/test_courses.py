@@ -68,6 +68,31 @@ def sample_rows() -> list[list[str]]:
 
 
 class ParserTest(unittest.TestCase):
+    def test_split_week_and_period_lines(self) -> None:
+        rows = [
+            ["某某大学 学生个人课表"],
+            ["学年学期：2026-2027-1"],
+            ["", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"],
+            [
+                "第1~2节\n08:00-09:30",
+                "\n逻辑学\n张玉志\n1-16[周]\nJS203\n[01-02]节",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            ],
+        ]
+        result = parse_timetable(rows)
+        self.assertEqual(len(result.courses), 1)
+        course = result.courses[0]
+        self.assertEqual(course.name, "逻辑学")
+        self.assertEqual(course.periods, (1, 2))
+        self.assertEqual(course.start_minutes, 8 * 60)
+        self.assertEqual(course.end_minutes, 9 * 60 + 30)
+        self.assertTrue(result.has_timetable_times)
+
     def test_parse_sample(self) -> None:
         result = parse_timetable(sample_rows())
         self.assertEqual(len(result.big_sections), 2)

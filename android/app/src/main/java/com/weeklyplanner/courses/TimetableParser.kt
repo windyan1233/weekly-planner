@@ -61,9 +61,12 @@ object TimetableParser {
     }
     private val timeRegex = Regex("""(\d{1,2})[:：](\d{2})\s*[-~—]\s*(\d{1,2})[:：](\d{2})""")
     private val periodListRegex = Regex("""\((\d{1,2})\s*[,，]\s*(\d{1,2})\)""")
+    private val altPeriodListRegex = Regex("""第\s*(\d{1,2})\s*[-~—]\s*(\d{1,2})\s*节""")
+    private val weekOnlyRegex = Regex("""^\s*[\d,，、\-–—~]+\s*[\(（]?\s*\[?\s*周\s*\]?\s*[\)）]?\s*$""")
+    private val periodOnlyRegex = Regex("""^\s*\[\s*[\d\-－,，]+\s*节?\]\s*节?\s*$""")
     private val scheduleRegex = Regex("""([\d,\-]+)\s*\(\[周\]\)""")
     private val scheduleAltRegex = Regex("""([\d,\-]+)\s*周""")
-    private val periodsRegex = Regex("""\[([\d\-]+)节\]""")
+    private val periodsRegex = Regex("""\[([\d\-－,，]+)\s*节?\]\s*节?""")
 
     fun parse(rows: List<List<String>>): ParseResult {
         val table = rows.map { row -> row.map { it.trim() } }
@@ -85,8 +88,9 @@ object TimetableParser {
 
         for (row in table.drop(headerIndex + 1)) {
             val label = row.firstOrNull().orEmpty()
-            if (!label.contains("大节")) continue
-            val periodMatch = periodListRegex.find(label) ?: continue
+            val periodMatch = periodListRegex.find(label)
+                ?: altPeriodListRegex.find(label)
+                ?: continue
             val periods = listOf(
                 periodMatch.groupValues[1].toInt(),
                 periodMatch.groupValues[2].toInt()
@@ -153,6 +157,22 @@ object TimetableParser {
         }
     }
 
+    private fun mergeSplitSchedule(lines: List<String>): List<String> {
+        val result = lines.toMutableList()
+        for (index in result.indices) {
+            if (!periodOnlyRegex.matches(result[index])) continue
+            for (previous in index - 1 downTo 0) {
+                if (result[previous].isBlank()) break
+                if (weekOnlyRegex.matches(result[previous])) {
+                    result[previous] = result[previous].trimEnd() + result[index].trim()
+                    result[index] = ""
+                    break
+                }
+            }
+        }
+        return result
+    }
+
     private fun parseCell(
         cell: String,
         weekday: Int,
@@ -163,7 +183,7 @@ object TimetableParser {
     ) {
         val blocks = mutableListOf<MutableList<String>>()
         val current = mutableListOf<String>()
-        for (line in cell.replace("\r", "").split("\n")) {
+        for (line in mergeSplitSchedule(cell.replace("\r", "").split("\n"))) {
             if (line.isBlank()) {
                 if (current.isNotEmpty()) {
                     blocks += current.toMutableList()
