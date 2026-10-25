@@ -19,6 +19,8 @@ planner.before-*.db
 # 构建产物
 build/
 dist/
+build-*/
+dist-*/
 发布/
 *.zip
 *.apk
