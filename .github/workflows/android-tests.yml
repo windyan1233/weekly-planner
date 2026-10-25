@@ -1,6 +1,7 @@
 name: android-tests
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - "android/**"

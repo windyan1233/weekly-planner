@@ -104,6 +104,14 @@ keyPassword=***
 - [JSON 格式摘要](docs/exchange-format.md)
 - [隐私清理记录](docs/PRIVACY-AUDIT.md)
 
+## 关于作者
+
+我是一名非计算机专业的大一学生，这个项目是我在 AI 辅助下完成的：代码可能不够成熟，但功能都在真实使用。
+
+欢迎通过 Issue 提建议；如果这个项目对你有帮助，点个 Star 就是最大的鼓励。
+
+> 应用内「我的 → 作者的话」有更完整的说明。
+
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。第三方依赖许可见 [NOTICE](NOTICE)。
