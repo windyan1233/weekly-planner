@@ -632,7 +632,7 @@ class MainWindow(QMainWindow):
         outside = [
             task
             for task in hits
-            if task.due_at.date() not in week and not any(p.plan_at.date() in week for p in task.plans)
+            if not any(day in week for day in task.visible_dates())
         ]
         if not outside:
             self._search_banner.hide()
@@ -723,7 +723,7 @@ class MainWindow(QMainWindow):
         except TaskNotFoundError:
             self.refresh(reload_filters=True)
             return
-        dates = [task.due_at.date()] + [plan.plan_at.date() for plan in task.plans]
+        dates = task.visible_dates()
         visible = set(week_days(self.week_view.week_start()))
         if not any(day in visible for day in dates):
             self._navigate(
@@ -860,7 +860,7 @@ class MainWindow(QMainWindow):
             task = self.service.get_task(task_id)
         except TaskNotFoundError:
             return
-        dates = [task.due_at.date()] + [plan.plan_at.date() for plan in task.plans]
+        dates = task.visible_dates()
         visible = set(week_days(self.week_view.week_start()))
         if not any(day in visible for day in dates):
             self._navigate(start_of_week(dates[0]), follow=start_of_week(dates[0]) == start_of_week(self._today))

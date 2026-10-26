@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CourseEntity::class,
         CourseSessionEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -52,6 +52,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 2 -> 3：计划时间支持起止时间与提醒开关，任务支持「截止是否提醒」。
+         * 旧数据升级后：没有结束时间（NULL）、开始提醒开、结束提醒关、截止提醒开。
+         */
+        internal val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `tasks` ADD COLUMN `remindDue` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `plan_times` ADD COLUMN `endAt` INTEGER")
+                db.execSQL("ALTER TABLE `plan_times` ADD COLUMN `remindStart` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `plan_times` ADD COLUMN `remindEnd` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -61,7 +74,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "planner.db"
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
             }
     }
 }

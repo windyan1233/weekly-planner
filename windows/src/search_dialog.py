@@ -95,8 +95,7 @@ class SearchDialog(QDialog):
         outside = 0
         now = datetime.now()
         for task in self._tasks:
-            due_date = task.due_at.date()
-            in_week = due_date in week or any(plan.plan_at.date() in week for plan in task.plans)
+            in_week = any(day in week for day in task.visible_dates())
             if not in_week:
                 outside += 1
             text = self._describe(task, in_week, now)
@@ -114,7 +113,14 @@ class SearchDialog(QDialog):
         if task.is_overdue(now):
             flags.append("逾期 " + remaining_label(task.due_at, now).replace("已逾期 ", ""))
         plans = len(task.plans)
-        plan_text = f"{plans} 个计划时间" if plans else "无计划时间"
+        if plans:
+            plan_text = f"{plans} 个计划时间"
+            # 有结束时间的新计划才额外显示起止（一条），旧计划保持原来的显示
+            first = task.sorted_plans()[0]
+            if first.end_at is not None:
+                plan_text += f" · {first.range_text}"
+        else:
+            plan_text = "无计划时间"
         location = "本周" if in_week else "其它周"
         return (
             f"{task.title}\n截止 {task.due_at.strftime('%Y-%m-%d %H:%M')} · {plan_text}"

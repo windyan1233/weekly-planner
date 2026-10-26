@@ -51,7 +51,10 @@ CREATE TABLE IF NOT EXISTS plan_times (
     remind_enabled      INTEGER NOT NULL DEFAULT 0,
     remind_lead_minutes INTEGER NOT NULL DEFAULT 10,
     done                INTEGER NOT NULL DEFAULT 0,
-    sort_order          INTEGER NOT NULL DEFAULT 0
+    sort_order          INTEGER NOT NULL DEFAULT 0,
+    end_at              TEXT,
+    remind_start        INTEGER NOT NULL DEFAULT 1,
+    remind_end          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_plans_task ON plan_times(task_id);
@@ -104,6 +107,13 @@ CREATE TABLE IF NOT EXISTS course_sessions (
 CREATE INDEX IF NOT EXISTS idx_course_sessions_day ON course_sessions(day);
 CREATE INDEX IF NOT EXISTS idx_course_sessions_course ON course_sessions(course_id);
 """
+
+# 旧库升级：按需给 plan_times 补列（用 PRAGMA table_info 判断，可重复执行）
+PLAN_TIME_MIGRATIONS: tuple[tuple[str, str], ...] = (
+    ("end_at", "ALTER TABLE plan_times ADD COLUMN end_at TEXT"),
+    ("remind_start", "ALTER TABLE plan_times ADD COLUMN remind_start INTEGER NOT NULL DEFAULT 1"),
+    ("remind_end", "ALTER TABLE plan_times ADD COLUMN remind_end INTEGER NOT NULL DEFAULT 0"),
+)
 
 
 class DatabaseError(RuntimeError):
@@ -196,6 +206,7 @@ class Database:
             try:
                 version = self.connection.execute("PRAGMA user_version").fetchone()[0]
                 self.connection.executescript(SCHEMA_SQL)
+                self._migrate_schema()
                 if version < SCHEMA_VERSION:
                     self.connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 # 真正试一次写事务：表都存在时 CREATE IF NOT EXISTS 不会触发写入，
@@ -219,6 +230,24 @@ class Database:
                     detail=f"{exc}（文件：{self.path}）",
                     operation="init_schema",
                 ) from exc
+
+    def _migrate_schema(self) -> None:
+        """给旧库补齐新增列（``PRAGMA table_info`` 检查后 ``ALTER TABLE``）。
+
+        旧数据：``end_at`` 保持 NULL（表示没有结束时间）；``remind_start`` 回填成
+        原来的 ``remind_enabled``，这样升级后旧任务的提醒行为不会突然变化。
+        """
+        columns = {
+            str(row["name"]) for row in self.connection.execute("PRAGMA table_info(plan_times)")
+        }
+        added: set[str] = set()
+        for name, ddl in PLAN_TIME_MIGRATIONS:
+            if name in columns:
+                continue
+            self.connection.execute(ddl)
+            added.add(name)
+        if "remind_start" in added and "remind_enabled" in columns:
+            self.connection.execute("UPDATE plan_times SET remind_start = remind_enabled")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -412,10 +441,26 @@ class Database:
     # ------------------------------------------------------------------
     @staticmethod
     def _plans_to_text(plans: Iterable[Any]) -> str:
+        """计划时间列格式：``开始|说明|提前分钟|结束|提醒开始|提醒结束``。
+
+        后三段是新增的（旧版 CSV 只有前三段），读取时缺失就按旧行为处理。
+        """
         chunks = []
         for plan in plans:
             remark = plan.label.replace("|", "／")
-            chunks.append(f"{plan.plan_at.strftime('%Y-%m-%d %H:%M')}|{remark}|{plan.remind_lead_minutes}")
+            end_at = plan.end_at.strftime("%Y-%m-%d %H:%M") if plan.end_at else ""
+            chunks.append(
+                "|".join(
+                    [
+                        plan.plan_at.strftime("%Y-%m-%d %H:%M"),
+                        remark,
+                        str(plan.remind_lead_minutes),
+                        end_at,
+                        "1" if plan.remind_start else "0",
+                        "1" if plan.remind_end else "0",
+                    ]
+                )
+            )
         return "; ".join(chunks)
 
     def export_csv(self, path: str | Path) -> int:
@@ -446,6 +491,11 @@ class Database:
                 self.plan_at = datetime.strptime(row["plan_at"], "%Y-%m-%d %H:%M")
                 self.label = row["label"] or ""
                 self.remind_lead_minutes = row["remind_lead_minutes"]
+                self.end_at = (
+                    datetime.strptime(row["end_at"], "%Y-%m-%d %H:%M") if row["end_at"] else None
+                )
+                self.remind_start = bool(row["remind_start"])
+                self.remind_end = bool(row["remind_end"])
 
         try:
             with open(path, "w", encoding="utf-8-sig", newline="") as handle:
@@ -564,14 +614,36 @@ class Database:
                         lead = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip() else 0
                     except ValueError:
                         lead = 0
+                    end_at = None
+                    if len(parts) > 3 and parts[3].strip():
+                        try:
+                            end_at = parse_dt(parts[3].strip())
+                        except ValueError:
+                            end_at = None
+                        if end_at is not None and end_at <= plan_at:
+                            end_at = None
+                    # 旧 CSV 没有第 5 段：沿用原来的「提前分钟 > 0 才有开始提醒」
+                    if len(parts) > 4 and parts[4].strip():
+                        remind_start = parts[4].strip().lower() in ("1", "是", "true", "yes")
+                    else:
+                        remind_start = lead > 0
+                    remind_end = (
+                        end_at is not None
+                        and len(parts) > 5
+                        and parts[5].strip().lower() in ("1", "是", "true", "yes")
+                    )
                     conn.execute(
-                        "INSERT INTO plan_times(task_id, plan_at, label, remind_enabled,"
-                        " remind_lead_minutes, done, sort_order) VALUES (?,?,?,?,?,0,?)",
+                        "INSERT INTO plan_times(task_id, plan_at, end_at, label, remind_enabled,"
+                        " remind_start, remind_end, remind_lead_minutes, done, sort_order)"
+                        " VALUES (?,?,?,?,?,?,?,?,0,?)",
                         (
                             task_id,
                             format_dt(plan_at),
+                            format_dt(end_at) if end_at is not None else None,
                             label,
-                            1 if lead > 0 else 0,
+                            1 if remind_start else 0,
+                            1 if remind_start else 0,
+                            1 if remind_end else 0,
                             lead if lead > 0 else 10,
                             index,
                         ),

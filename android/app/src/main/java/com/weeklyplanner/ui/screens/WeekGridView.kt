@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -46,6 +48,7 @@ import com.weeklyplanner.data.CourseSessionEntity
 import com.weeklyplanner.data.PlanTimeEntity
 import com.weeklyplanner.data.TaskEntity
 import com.weeklyplanner.domain.Dates
+import com.weeklyplanner.domain.PlanTimes
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -59,6 +62,13 @@ private val TIME_COLUMN_WIDTH: Dp = 36.dp
 private const val OVERLAP_OFFSET_DP = 6f
 private const val MAX_OVERLAP_LEVEL = 3
 
+/** 任务块带一点透明度，压在课程上面时还能看到下面的课。 */
+private const val TASK_BLOCK_ALPHA = 0.78f
+private const val TASK_BLOCK_DONE_ALPHA = 0.52f
+
+/** 跨天计划在中间那天画的延续条高度。 */
+private val CONTINUATION_HEIGHT: Dp = 12.dp
+
 internal data class WeekBlock(
     val dayIndex: Int,
     val startMinutes: Int,
@@ -68,7 +78,9 @@ internal data class WeekBlock(
     val color: Color,
     val taskId: Long? = null,
     val info: String = "",
-    val location: String = ""
+    val location: String = "",
+    /** 跨天计划在中间那天只画一条细的延续条，不是真实区间。 */
+    val continuation: Boolean = false
 )
 
 internal data class PlacedBlock(val block: WeekBlock, val level: Int)
@@ -117,6 +129,7 @@ fun WeekGridView(
         else -> scheme.primary
     }
 
+    // 课程在下、任务在上；任务块不缩窄，靠透明度和层级区分。
     val blocks = buildList {
         for (session in courseSessions) {
             val date = runCatching { LocalDate.parse(session.day) }.getOrNull() ?: continue
@@ -139,25 +152,61 @@ fun WeekGridView(
             )
         }
         for (plan in plans) {
-            val zoned = Instant.ofEpochMilli(plan.planAt).atZone(ZoneId.systemDefault())
-            val dayIndex = ChronoUnit.DAYS.between(weekStart, zoned.toLocalDate()).toInt()
-            if (dayIndex !in 0..6) continue
             val task = tasksById[plan.taskId] ?: continue
-            val start = zoned.hour * 60 + zoned.minute
-            val end = (start + 45).coerceAtMost(END_HOUR * 60)
-            add(
-                WeekBlock(
-                    dayIndex = dayIndex,
-                    startMinutes = start,
-                    endMinutes = end,
-                    title = task.title,
-                    subtitle = startClock(start),
-                    color = priorityColor(task).copy(alpha = if (task.done) 0.6f else 1f),
-                    taskId = task.id,
-                    info = listOf(task.title, task.kind, task.priority, timeLabel(start, end))
-                        .filter { it.isNotBlank() }.joinToString("\n")
-                )
+            val blockColor = priorityColor(task).copy(
+                alpha = if (task.done) TASK_BLOCK_DONE_ALPHA else TASK_BLOCK_ALPHA
             )
+            val info = listOf(
+                task.title,
+                task.kind,
+                task.priority,
+                PlanTimes.rangeLabel(plan.planAt, plan.endAt)
+            ).filter { it.isNotBlank() }.joinToString("\n")
+            val hasRange = PlanTimes.hasRange(plan.planAt, plan.endAt)
+            // 只画落在本周内的片段；跨天时开始/结束/中间天各自不同。
+            for (segment in PlanTimes.segments(
+                planAt = plan.planAt,
+                endAt = plan.endAt,
+                weekStart = weekStart,
+                dayStartMinutes = START_HOUR * 60,
+                dayEndMinutes = END_HOUR * 60
+            )) {
+                val dayIndex = ChronoUnit.DAYS.between(weekStart, segment.date).toInt()
+                if (dayIndex !in 0..6) continue
+                if (segment.continuation) {
+                    add(
+                        WeekBlock(
+                            dayIndex = dayIndex,
+                            startMinutes = segment.startMinutes,
+                            endMinutes = segment.endMinutes,
+                            title = task.title,
+                            subtitle = "跨天延续",
+                            color = blockColor,
+                            taskId = task.id,
+                            info = info,
+                            continuation = true
+                        )
+                    )
+                } else {
+                    add(
+                        WeekBlock(
+                            dayIndex = dayIndex,
+                            startMinutes = segment.startMinutes,
+                            endMinutes = segment.endMinutes,
+                            title = task.title,
+                            subtitle = if (hasRange) {
+                                timeLabel(segment.startMinutes, segment.endMinutes)
+                            } else {
+                                // 没有结束时间的旧计划：保留原来的「只显示开始时间」。
+                                startClock(segment.startMinutes)
+                            },
+                            color = blockColor,
+                            taskId = task.id,
+                            info = info
+                        )
+                    )
+                }
+            }
         }
     }
 
@@ -221,7 +270,9 @@ fun WeekGridView(
                         }
                     }
 
-                    val placed = placeBlocks(blocks.filter { it.dayIndex == dayIndex })
+                    val placed = placeBlocks(
+                        blocks.filter { it.dayIndex == dayIndex && !it.continuation }
+                    )
                     // 课程在下、任务在上；任务不缩窄，避免和下面的课程糊在一起。
                     placed.sortedWith(
                         compareBy({ it.block.taskId != null }, { it.block.startMinutes })
@@ -285,6 +336,41 @@ fun WeekGridView(
                                     )
                                 }
                             }
+                        }
+                    }
+
+                    // 跨天计划在中间那天：一条细的延续条（12:00），低透明度、可点击。
+                    blocks.filter { it.dayIndex == dayIndex && it.continuation }.forEach { bar ->
+                        val top = HOUR_HEIGHT * ((bar.startMinutes - START_HOUR * 60) / 60f)
+                        Row(
+                            Modifier
+                                .offset(y = top)
+                                .fillMaxWidth()
+                                .height(CONTINUATION_HEIGHT)
+                                .padding(horizontal = 1.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(bar.color.copy(alpha = 0.30f))
+                                .clickable {
+                                    bar.taskId?.let(onOpenTask)
+                                }
+                                .padding(horizontal = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(3.dp)
+                                    .background(bar.color.copy(alpha = 0.9f), CircleShape)
+                            )
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                bar.title,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 6.5.sp,
+                                lineHeight = 8.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
 

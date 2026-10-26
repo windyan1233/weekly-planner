@@ -86,8 +86,10 @@ class ScheduleRepository(
     suspend fun refreshReminders() {
         val settings = settingsRepository.load()
         val tasks = taskDao.all().filter { !it.done }
-        val plansByTask = taskDao.allPlans().groupBy({ it.taskId }, { it.id to it.planAt })
-        val specs = ReminderPlanner.specs(tasks.map { it.id to it.dueAt }, plansByTask, settings)
+        val plansByTask = taskDao.allPlans().groupBy { it.taskId }
+        // 三个开关（截止 / 开始 / 结束）都在 ReminderPlanner 里判断；
+        // 关掉的开关不会出现在 desired 里，下面会删掉对应的旧提醒。
+        val specs = ReminderPlanner.specs(tasks, plansByTask, settings)
         val now = System.currentTimeMillis()
 
         val desired = specs.associateBy { it.taskId to Triple(it.kind, it.planKey, it.anchorAt) }

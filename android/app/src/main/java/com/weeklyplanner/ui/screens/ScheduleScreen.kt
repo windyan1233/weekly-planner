@@ -53,6 +53,7 @@ import com.weeklyplanner.data.CourseSessionEntity
 import com.weeklyplanner.data.PlanTimeEntity
 import com.weeklyplanner.data.TaskEntity
 import com.weeklyplanner.domain.Dates
+import com.weeklyplanner.domain.PlanTimes
 import com.weeklyplanner.ui.components.CardSurface
 import com.weeklyplanner.ui.components.EmptyState
 import com.weeklyplanner.ui.components.SectionTitle
@@ -233,8 +234,16 @@ fun ScheduleScreen(
                     )
                 }
         ) {
+            // 跨天计划只要覆盖了选中这天就显示，仍然只占一条，不拆成多条。
             val planItems = plans
-                .filter { Dates.toDate(it.planAt) == selectedDate }
+                .filter { plan ->
+                    val start = Dates.toDate(plan.planAt)
+                    val end = plan.endAt
+                        ?.takeIf { it > plan.planAt }
+                        ?.let { Dates.toDate(it) }
+                        ?: start
+                    selectedDate >= start && selectedDate <= end
+                }
                 .sortedBy { it.planAt }
             val dueItems = tasks
                 .filter { it.dueAt != null && Dates.toDate(it.dueAt!!) == selectedDate }
@@ -303,7 +312,7 @@ fun ScheduleScreen(
                             TaskRow(
                                 title = task.title,
                                 subtitle = listOf(task.kind, task.priority).joinToString(" · "),
-                                meta = Dates.toTimeText(plan.planAt),
+                                meta = PlanTimes.listLabel(plan.planAt, plan.endAt),
                                 done = task.done,
                                 onClick = { onOpenTask(task.id) },
                                 onToggle = { onToggleTask(task, it) }

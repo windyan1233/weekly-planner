@@ -25,6 +25,7 @@ from .models import (
     KIND_DUE,
     KIND_OVERDUE,
     KIND_PLAN,
+    KIND_PLAN_END,
     PlanTime,
     Reminder,
     REMINDER_PENDING,
@@ -109,6 +110,11 @@ def compose_message(fired: FiredReminder, now: datetime) -> ReminderMessage:
         plan = fired.plan
         plan_at = plan.plan_at if plan else fired.reminder.fire_at
         detail = f"计划时间：{_short_time(plan_at)}"
+        if plan and plan.end_at is not None:
+            if plan.end_at.date() == plan.plan_at.date():
+                detail += f" → {plan.end_at.strftime('%H:%M')}"
+            else:
+                detail += f" → {_short_time(plan.end_at)}"
         if plan and plan.label:
             detail += f" · {plan.label}"
         lines = [
@@ -120,6 +126,18 @@ def compose_message(fired: FiredReminder, now: datetime) -> ReminderMessage:
             index, total = task.plan_index(plan.id)
             lines.append(f"本任务第 {index}/{total} 个计划时间")
         title = f"计划提醒 · {task.title}"
+    elif fired.kind == KIND_PLAN_END:
+        plan = fired.plan
+        end_at = plan.end_at if plan and plan.end_at else fired.reminder.fire_at
+        detail = f"计划结束：{_short_time(end_at)}"
+        if plan and plan.label:
+            detail += f" · {plan.label}"
+        lines = [
+            detail,
+            f"截止时间：{_short_time(task.due_at)}",
+            "计划已到结束时间" if end_at <= now else remaining_label(end_at, now),
+        ]
+        title = f"计划结束提醒 · {task.title}"
     elif fired.kind == KIND_OVERDUE:
         lines = [
             f"截止时间：{_short_time(task.due_at)}",
@@ -182,18 +200,30 @@ class ReminderEngine:
                 )
             )
         for plan in task.sorted_plans():
-            if plan.done or not plan.remind_enabled:
+            if plan.done:
                 continue
-            fire_at = plan.plan_at - timedelta(minutes=plan.remind_lead_minutes)
-            specs.append(
-                ReminderSpec(
-                    task_id=int(task.id),
-                    kind=KIND_PLAN,
-                    plan_id=plan.id,
-                    fire_at=fire_at,
-                    anchor_at=format_dt(plan.plan_at),
+            if plan.remind_start:
+                fire_at = plan.plan_at - timedelta(minutes=plan.remind_lead_minutes)
+                specs.append(
+                    ReminderSpec(
+                        task_id=int(task.id),
+                        kind=KIND_PLAN,
+                        plan_id=plan.id,
+                        fire_at=fire_at,
+                        anchor_at=format_dt(plan.plan_at),
+                    )
                 )
-            )
+            # 结束提醒：只有设置了结束时间且打开开关才生成，提醒时刻 = 结束时间（不提前）
+            if plan.end_at is not None and plan.remind_end:
+                specs.append(
+                    ReminderSpec(
+                        task_id=int(task.id),
+                        kind=KIND_PLAN_END,
+                        plan_id=plan.id,
+                        fire_at=plan.end_at,
+                        anchor_at=format_dt(plan.end_at),
+                    )
+                )
         return specs
 
     def sync_task(self, task: Task) -> dict[str, int]:
@@ -344,7 +374,7 @@ class ReminderEngine:
         if task is None:
             return None, None
         plan = None
-        if reminder.kind == KIND_PLAN:
+        if reminder.kind in (KIND_PLAN, KIND_PLAN_END):
             plan = next((p for p in task.plans if p.id == reminder.plan_id), None)
         return task, plan
 
@@ -354,9 +384,13 @@ class ReminderEngine:
         if reminder.kind == KIND_DUE:
             return task.remind_due and format_dt(task.due_at) == reminder.anchor_at
         if reminder.kind == KIND_PLAN:
-            if plan is None or plan.done or not plan.remind_enabled:
+            if plan is None or plan.done or not plan.remind_start:
                 return False
             return format_dt(plan.plan_at) == reminder.anchor_at
+        if reminder.kind == KIND_PLAN_END:
+            if plan is None or plan.done or plan.end_at is None or not plan.remind_end:
+                return False
+            return format_dt(plan.end_at) == reminder.anchor_at
         if reminder.kind == KIND_OVERDUE:
             return task.is_overdue(reminder.fire_at)
         return True

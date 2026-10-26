@@ -56,6 +56,7 @@ object BackupManager {
                     put("priority", priorityOut(task.priority))
                     if (task.dueAt == null) put("dueAt", JSONObject.NULL) else put("dueAt", task.dueAt)
                     put("done", task.done)
+                    put("remindDue", task.remindDue)
                     put("createdAt", task.createdAt)
                     put("updatedAt", task.updatedAt)
                 })
@@ -67,6 +68,9 @@ object BackupManager {
                     put("id", plan.id)
                     put("taskId", plan.taskId)
                     put("planAt", plan.planAt)
+                    if (plan.endAt == null) put("endAt", JSONObject.NULL) else put("endAt", plan.endAt)
+                    put("remindStart", plan.remindStart)
+                    put("remindEnd", plan.remindEnd)
                 })
             }
         })
@@ -186,6 +190,8 @@ object BackupManager {
                     priority = priorityIn(item.optString("priority", "normal")),
                     dueAt = if (item.isNull("dueAt")) null else item.getLong("dueAt"),
                     done = item.optBoolean("done"),
+                    // 旧备份没有 remindDue：默认开
+                    remindDue = item.optBoolean("remindDue", true),
                     createdAt = item.optLong("createdAt", System.currentTimeMillis()),
                     updatedAt = item.optLong("updatedAt", System.currentTimeMillis())
                 )
@@ -198,7 +204,11 @@ object BackupManager {
                 PlanTimeEntity(
                     id = item.getLong("id"),
                     taskId = item.getLong("taskId"),
-                    planAt = item.getLong("planAt")
+                    planAt = item.getLong("planAt"),
+                    // 旧备份没有结束时间：保持为 null，按原来的时间点显示
+                    endAt = if (item.isNull("endAt")) null else item.getLong("endAt"),
+                    remindStart = item.optBoolean("remindStart", true),
+                    remindEnd = item.optBoolean("remindEnd", false)
                 )
             }
         }.orEmpty()

@@ -7,11 +7,15 @@
 * 顶部星期标题由 :class:`WeekView` 自己绘制，坐标直接取自下面各列的几何位置，
   因此列宽变化时标题和内容始终对齐。
 * 点击空白时间段 = 以该时间快速新建计划时间；点击任务块 = 查看详情。
+* 有计划结束时间的任务按真实起止时间绘制：同一天是一整块；跨天时开始那天画到
+  23:00、结束那天从 07:00 开始、中间每天在 12:00 画一条细的「跨天延续」横条。
+* 任务块半透明地画在课程块上面（不因为课程重叠而缩窄，靠透明度和绘制顺序区分）。
 * 今天所在列有柔和底色、日期高亮，并在当前时间处画一条细指示线。
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTime, QTimer, Signal
@@ -47,6 +51,147 @@ COLUMN_PAD_X = 5
 COLUMN_PAD_Y = 4
 MIN_CHIP_HEIGHT = 24
 SNAP_MINUTES = 15
+
+# 跨天计划：开始那天画到 23:00，结束那天从 07:00 开始画，
+# 中间每天在 12:00 位置画一条细的「跨天延续」横条。
+CROSS_START_DAY_END_MINUTES = 23 * 60
+CROSS_END_DAY_START_MINUTES = 7 * 60
+CONTINUATION_AT_MINUTES = 12 * 60
+CONTINUATION_HEIGHT = 18
+CONTINUATION_GAP = 4
+
+# 任务块约 0.78 不透明度（课程表会从下面透出来），延续横条更淡
+TASK_FILL_ALPHA = 200
+CONTINUATION_FILL_ALPHA = 78
+CONTINUATION_BORDER_ALPHA = 140
+
+
+@dataclass(frozen=True)
+class DaySegment:
+    """某个计划/截止项在「某一天」里要画的那一段。
+
+    ``continuation`` 为 True 表示这是跨天计划中间某天的细横条。
+    """
+
+    occurrence: Occurrence
+    start_minutes: int
+    end_minutes: int
+    continuation: bool = False
+    day: date | None = None
+
+    @property
+    def key(self) -> tuple:
+        return self.occurrence.key
+
+    @property
+    def minutes(self) -> int:
+        return max(1, self.end_minutes - self.start_minutes)
+
+
+def build_day_segments(occurrences: list[Occurrence], day: date) -> list[DaySegment]:
+    """把出现项裁剪成「这一天需要绘制的一段」——纯函数，方便单测。"""
+    segments: list[DaySegment] = []
+    for occ in occurrences:
+        start_day = occ.start.date()
+        if occ.end_at is None:
+            # 旧计划：原来的固定时长短块
+            if start_day != day:
+                continue
+            start = occ.start.hour * 60 + occ.start.minute
+            end = min(24 * 60, max(start + 1, start + occ.duration_minutes))
+            segments.append(DaySegment(occ, start, end, continuation=False, day=day))
+            continue
+
+        end_day = occ.end_at.date()
+        if day < start_day or day > end_day:
+            continue
+        end_clock = occ.end_at.hour * 60 + occ.end_at.minute
+
+        if start_day == end_day:
+            start = occ.start.hour * 60 + occ.start.minute
+            segments.append(
+                DaySegment(
+                    occ,
+                    start,
+                    max(start + 1, min(24 * 60, end_clock)),
+                    continuation=False,
+                    day=day,
+                )
+            )
+        elif day == start_day:
+            start = occ.start.hour * 60 + occ.start.minute
+            end = CROSS_START_DAY_END_MINUTES
+            if start >= end:
+                # 23:00 之后才开始：画到当天结束，保证还能看到并点击
+                end = min(24 * 60, start + 15)
+            segments.append(DaySegment(occ, start, end, continuation=False, day=day))
+        elif day == end_day:
+            start = CROSS_END_DAY_START_MINUTES
+            if end_clock <= start:
+                # 结束时间早于 07:00：当天 00:00 到结束时间才是真实占用的区间
+                start = 0
+            segments.append(
+                DaySegment(
+                    occ,
+                    start,
+                    max(start + 1, min(24 * 60, end_clock)),
+                    continuation=False,
+                    day=day,
+                )
+            )
+        else:
+            segments.append(
+                DaySegment(
+                    occ,
+                    CONTINUATION_AT_MINUTES,
+                    CONTINUATION_AT_MINUTES,
+                    continuation=True,
+                    day=day,
+                )
+            )
+    segments.sort(key=lambda seg: (seg.start_minutes, seg.continuation, seg.occurrence.title))
+    return segments
+
+
+def assign_lane_ranges(items: list[tuple[tuple, float, float]]) -> dict[tuple, tuple[int, int]]:
+    """给同一列里重叠的块分配通道，返回 {key: (lane, lane_count)}。"""
+    ordered = sorted(items, key=lambda item: (item[1], item[2], str(item[0])))
+    if not ordered:
+        return {}
+
+    clusters: list[list[tuple[tuple, float, float]]] = []
+    cluster: list[tuple[tuple, float, float]] = []
+    cluster_end = -1.0
+    for item in ordered:
+        _, start, end = item
+        if cluster and start >= cluster_end:
+            clusters.append(cluster)
+            cluster = []
+            cluster_end = end
+        cluster.append(item)
+        cluster_end = max(cluster_end, end)
+    if cluster:
+        clusters.append(cluster)
+
+    result: dict[tuple, tuple[int, int]] = {}
+    for group in clusters:
+        lane_ends: list[float] = []
+        assignments: list[tuple[tuple, int]] = []
+        for key, start, end in group:
+            placed = False
+            for index, lane_end in enumerate(lane_ends):
+                if lane_end <= start:
+                    lane_ends[index] = end
+                    assignments.append((key, index))
+                    placed = True
+                    break
+            if not placed:
+                lane_ends.append(end)
+                assignments.append((key, len(lane_ends) - 1))
+        lane_count = max(1, len(lane_ends))
+        for key, lane in assignments:
+            result[key] = (lane, lane_count)
+    return result
 
 
 def _font(size: int, weight: int = 400) -> QFont:
@@ -92,9 +237,22 @@ class EventChip(QWidget):
     clicked = Signal(int)
     context_requested = Signal(int, QPoint)
 
-    def __init__(self, occurrence: Occurrence, palette: Palette, now: datetime, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        segment: "DaySegment | Occurrence",
+        palette: Palette,
+        now: datetime,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._occ = occurrence
+        if isinstance(segment, Occurrence):
+            # 兼容直接传 Occurrence 的老用法（按整天未裁剪的一段处理）
+            start = segment.start.hour * 60 + segment.start.minute
+            segment = DaySegment(
+                segment, start, start + segment.duration_minutes, False, segment.start.date()
+            )
+        self._segment = segment
+        self._occ = segment.occurrence
         self._palette = palette
         self._now = now
         self._hover = False
@@ -112,6 +270,14 @@ class EventChip(QWidget):
     def occurrence(self) -> Occurrence:
         return self._occ
 
+    @property
+    def segment(self) -> DaySegment:
+        return self._segment
+
+    @property
+    def is_continuation(self) -> bool:
+        return self._segment.continuation
+
     def set_now(self, now: datetime) -> None:
         self._now = now
         self.update()
@@ -123,7 +289,10 @@ class EventChip(QWidget):
     def _tooltip(self) -> str:
         occ = self._occ
         task = occ.task
-        lines = [f"{task.title}", occ.detail_text]
+        if self.is_continuation:
+            lines = [f"{task.title} · 跨天延续", occ.detail_text]
+        else:
+            lines = [f"{task.title}", occ.detail_text]
         if task.description:
             lines.append(task.description)
         if task.notes:
@@ -148,13 +317,29 @@ class EventChip(QWidget):
             base = QColor(palette.danger if occ.task.is_overdue(self._now) else palette.warning)
         else:
             base = QColor(PRIORITY_COLORS.get(occ.task.priority, palette.accent))
-            if occ.plan is not None and occ.plan.remind_enabled:
-                pass
         fill = mix(palette.surface, base.name(), 0.16 if palette.name == "light" else 0.22)
         border = mix(palette.surface, base.name(), 0.42)
         return fill, border, base
 
+    def _time_text(self) -> str:
+        occ = self._occ
+        if occ.kind == KIND_DUE:
+            return "截止 " + format_time(occ.start)
+        plan = occ.plan
+        if plan is not None and plan.end_at is not None:
+            if occ.is_cross_day:
+                if self._segment.day == occ.start.date():
+                    return format_time(occ.start) + " · 跨天"
+                if self._segment.day == occ.end_at.date():
+                    return "→ " + format_time(occ.end_at)
+                return "跨天"
+            return f"{format_time(occ.start)}-{format_time(plan.end_at)}"
+        return format_time(occ.start)
+
     def paintEvent(self, event) -> None:  # noqa: N802
+        if self.is_continuation:
+            self._paint_continuation()
+            return
         palette = self._palette
         occ = self._occ
         painter = QPainter(self)
@@ -163,13 +348,13 @@ class EventChip(QWidget):
         fill, border, accent = self._colors()
         height = self.height()
 
-        # 背景
+        # 背景：半透明，课程块会从下面透出来（任务永远画在课程上面）
         if occ.is_done:
             fill = QColor(palette.surface_alt)
-        else:
-            fill = fill
         if self._hover:
             fill = mix(fill.name(), palette.accent, 0.10)
+        fill = QColor(fill)
+        fill.setAlpha(TASK_FILL_ALPHA)
         path = QPainterPath()
         path.addRoundedRect(rect, 8, 8)
         painter.fillPath(path, fill)
@@ -200,9 +385,7 @@ class EventChip(QWidget):
             badge_width = QFontMetrics(badge_font).horizontalAdvance(badge) + 10
 
         text_color = QColor(palette.done_text if occ.is_done else palette.text)
-        time_text = format_time(occ.start)
-        if occ.kind == KIND_DUE:
-            time_text = "截止 " + time_text
+        time_text = self._time_text()
 
         if compact:
             # 单行紧凑显示。时间轴本身已经表达了时刻，所以很窄的块只显示任务名，
@@ -241,7 +424,7 @@ class EventChip(QWidget):
             painter.end()
             return
 
-        # 第一行：时间
+        # 第一行：时间（有结束时间时显示 HH:mm-HH:mm）
         painter.setFont(self._font_time)
         painter.setPen(QColor(palette.text_muted if not occ.is_done else palette.done_text))
         time_rect = QRect(pad_left, 4, content_width - badge_width - 4, 14)
@@ -288,6 +471,45 @@ class EventChip(QWidget):
             )
         painter.end()
 
+    def _paint_continuation(self) -> None:
+        """跨天计划中间某天的细横条：低透明度、带任务名、可点击。"""
+        palette = self._palette
+        occ = self._occ
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        _, border, accent = self._colors()
+        fill = QColor(accent)
+        fill.setAlpha(CONTINUATION_FILL_ALPHA)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 6, 6)
+        painter.fillPath(path, fill)
+        line = QColor(border)
+        line.setAlpha(CONTINUATION_BORDER_ALPHA)
+        painter.setPen(QPen(line, 1.0))
+        painter.drawPath(path)
+
+        text_color = QColor(palette.done_text if occ.is_done else palette.text_secondary)
+        painter.setPen(text_color)
+        painter.setFont(self._font_tiny)
+        metrics = QFontMetrics(self._font_tiny)
+        text_rect = QRect(9, 0, max(10, int(rect.width()) - 90), int(rect.height()))
+        title = metrics.elidedText(occ.title, Qt.TextElideMode.ElideRight, text_rect.width())
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            title,
+        )
+        tag = "跨天延续"
+        tag_rect = QRect(max(10, int(rect.width()) - 78), 0, 70, int(rect.height()))
+        painter.setPen(QColor(palette.text_muted))
+        painter.drawText(
+            tag_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+            tag,
+        )
+        painter.end()
+
     def _badge_text(self, compact: bool = False) -> str:
         occ = self._occ
         done = occ.is_done or occ.task.status == "done"
@@ -296,6 +518,8 @@ class EventChip(QWidget):
                 return "✓"
             if occ.kind == KIND_DUE:
                 return "逾" if occ.task.is_overdue(self._now) else "截"
+            if occ.is_cross_day:
+                return "跨"
             return ""
         if done:
             return "已完成"
@@ -303,6 +527,8 @@ class EventChip(QWidget):
             return f"{occ.plan_index}/{occ.plan_total}"
         if occ.kind == KIND_DUE:
             return "逾期" if occ.task.is_overdue(self._now) else "截止"
+        if occ.is_cross_day:
+            return "跨天"
         return ""
 
     def _draw_badge(self, painter: QPainter, text: str, rect: QRect, compact: bool = False) -> None:
@@ -352,50 +578,16 @@ class EventChip(QWidget):
 # 一天的列
 # --------------------------------------------------------------------------
 def assign_lanes(occurrences: list[Occurrence]) -> dict[tuple, tuple[int, int]]:
-    """给重叠的事件分配通道，返回 {事件 key: (lane, lane_count)}。"""
+    """给重叠的事件分配通道，返回 {事件 key: (lane, lane_count)}。
 
-    def minutes(occ: Occurrence) -> tuple[float, float]:
-        start = occ.start.hour * 60 + occ.start.minute
-        return float(start), float(start + occ.duration_minutes)
-
-    ordered = sorted(occurrences, key=lambda o: (o.start, o.kind == KIND_DUE, o.title))
-    if not ordered:
-        return {}
-
-    clusters: list[list[Occurrence]] = []
-    cluster: list[Occurrence] = []
-    cluster_end = -1.0
-    for occ in ordered:
-        start, end = minutes(occ)
-        if cluster and start >= cluster_end:
-            clusters.append(cluster)
-            cluster = []
-            cluster_end = end
-        cluster.append(occ)
-        cluster_end = max(cluster_end, end)
-    if cluster:
-        clusters.append(cluster)
-
-    result: dict[tuple, tuple[int, int]] = {}
-    for group in clusters:
-        lane_ends: list[float] = []
-        assignments: list[tuple[Occurrence, int]] = []
-        for occ in group:
-            start, end = minutes(occ)
-            placed = False
-            for index, lane_end in enumerate(lane_ends):
-                if lane_end <= start:
-                    lane_ends[index] = end
-                    assignments.append((occ, index))
-                    placed = True
-                    break
-            if not placed:
-                lane_ends.append(end)
-                assignments.append((occ, len(lane_ends) - 1))
-        lane_count = max(1, len(lane_ends))
-        for occ, lane in assignments:
-            result[occ.key] = (lane, lane_count)
-    return result
+    仅用于「同一天、未裁剪」的事件；列内实际布局使用 :func:`assign_lane_ranges`
+    按真实绘制片段计算，跨天计划不会因为原始时长过长而把整列挤窄。
+    """
+    items: list[tuple[tuple, float, float]] = []
+    for occ in occurrences:
+        start = float(occ.start.hour * 60 + occ.start.minute)
+        items.append((occ.key, start, start + float(occ.duration_minutes)))
+    return assign_lane_ranges(items)
 
 
 class DayColumn(QWidget):
@@ -411,9 +603,11 @@ class DayColumn(QWidget):
         self._now = now
         self._is_today = day == now.date()
         self._occurrences: list[Occurrence] = []
+        self._segments: list[DaySegment] = []
         self._course_blocks: list[CourseBlock] = []
         self._chips: dict[tuple, EventChip] = {}
         self._lanes: dict[tuple, tuple[int, int]] = {}
+        self._continuation_index: dict[tuple, int] = {}
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self._hover_minute: int | None = None
@@ -454,17 +648,33 @@ class DayColumn(QWidget):
             chip.setParent(None)
             chip.deleteLater()
         self._chips.clear()
-        self._lanes = assign_lanes(occurrences)
-        for occ in occurrences:
-            chip = EventChip(occ, self._palette, self._now, self)
+        self._segments = build_day_segments(occurrences, self._day)
+        block_ranges = [
+            (seg.key, float(seg.start_minutes), float(seg.end_minutes))
+            for seg in self._segments
+            if not seg.continuation
+        ]
+        self._lanes = assign_lane_ranges(block_ranges)
+        self._continuation_index = {}
+        next_index = 0
+        for seg in self._segments:
+            if not seg.continuation:
+                continue
+            self._continuation_index[seg.key] = next_index
+            next_index += 1
+        for seg in self._segments:
+            chip = EventChip(seg, self._palette, self._now, self)
             chip.clicked.connect(self.chip_clicked)
             chip.context_requested.connect(self.chip_context_requested)
             chip.show()
-            self._chips[occ.key] = chip
+            self._chips[seg.key] = chip
         self._layout_chips()
 
     def occurrences(self) -> list[Occurrence]:
         return list(self._occurrences)
+
+    def segments(self) -> list[DaySegment]:
+        return list(self._segments)
 
     # -- 课程表 --------------------------------------------------------
     def set_course_blocks(self, blocks: list[CourseBlock]) -> None:
@@ -485,22 +695,29 @@ class DayColumn(QWidget):
 
     # ------------------------------------------------------------------
     def _layout_chips(self) -> None:
-        if not self._chips:
+        if not self._chips or not self._segments:
             return
         width = max(10, self.width() - 2 * COLUMN_PAD_X)
-        for occ in self._occurrences:
-            chip = self._chips.get(occ.key)
+        for seg in self._segments:
+            chip = self._chips.get(seg.key)
             if chip is None:
                 continue
-            lane, lane_count = self._lanes.get(occ.key, (0, 1))
+            if seg.continuation:
+                # 「跨天延续」横条：整行宽度、约 12:00 位置，多条时往下错开
+                offset = self._continuation_index.get(seg.key, 0) * (
+                    CONTINUATION_HEIGHT + CONTINUATION_GAP
+                )
+                top = COLUMN_PAD_Y + int(CONTINUATION_AT_MINUTES / 60 * HOUR_HEIGHT) + offset
+                chip.setGeometry(COLUMN_PAD_X, top, max(24, width), CONTINUATION_HEIGHT)
+                continue
+            lane, lane_count = self._lanes.get(seg.key, (0, 1))
             lane_width = width / lane_count
             gap = 3 if lane_count > 1 else 0
             x = COLUMN_PAD_X + int(lane * lane_width)
             chip_width = max(16 if lane_count > 1 else 24, int(lane_width) - gap)
-            start_minutes = occ.start.hour * 60 + occ.start.minute
-            top = COLUMN_PAD_Y + int(start_minutes / 60 * HOUR_HEIGHT)
-            height = max(MIN_CHIP_HEIGHT, int(occ.duration_minutes / 60 * HOUR_HEIGHT) - 2)
-            if start_minutes + occ.duration_minutes > 24 * 60:
+            top = COLUMN_PAD_Y + int(seg.start_minutes / 60 * HOUR_HEIGHT)
+            height = max(MIN_CHIP_HEIGHT, int(seg.minutes / 60 * HOUR_HEIGHT) - 2)
+            if seg.end_minutes >= 24 * 60:
                 height = max(MIN_CHIP_HEIGHT, self.height() - COLUMN_PAD_Y - top)
             chip.setGeometry(x, top, chip_width, height)
 
@@ -776,9 +993,11 @@ class WeekView(QWidget):
     def _distribute(self) -> None:
         grouped: dict[date, list[Occurrence]] = {day: [] for day in week_days(self._week_start)}
         for occ in self._occurrences:
-            day = occ.start.date()
-            if day in grouped:
-                grouped[day].append(occ)
+            # 跨天计划会出现在它覆盖的每一天：开始日、结束日、以及中间的延续日；
+            # 只画本周内的部分。
+            for day in occ.covered_dates():
+                if day in grouped:
+                    grouped[day].append(occ)
         for column in self._body.columns:
             column.set_occurrences(grouped.get(column.day(), []))
 

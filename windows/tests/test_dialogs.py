@@ -149,6 +149,119 @@ class TaskDialogTest(unittest.TestCase):
         self.assertEqual(updated.plans[0].remind_lead_minutes, 15)
 
 
+    def test_plan_row_with_end_time_and_three_reminder_switches(self) -> None:
+        dialog = TaskDialog(self.env.service)
+        dialog.title_edit.setText("带结束时间的任务")
+        self._fill_due(dialog, 2026, 10, 25, 18, 0)
+        dialog._add_plan_row(PlanDraft(plan_at=datetime(2026, 10, 20, 22, 0)))
+        row = dialog._plan_rows[0]
+        self.assertFalse(row.has_end)
+        self.assertFalse(row.remind_end_checkbox.isVisibleTo(row))
+        self.assertFalse(row.remind_start_checkbox.isChecked())
+
+        row.end_checkbox.setChecked(True)
+        self.assertTrue(row.has_end)
+        self.assertTrue(row.remind_end_checkbox.isVisibleTo(row))
+        # 打开结束时间时默认「开始后 1 小时」
+        self.assertEqual(row.to_draft().end_at, datetime(2026, 10, 20, 23, 0))
+
+        # 改成跨天：10-20 22:00 → 10-22 09:30
+        row.end_date_edit.setDate(QDate(2026, 10, 22))
+        row.end_time_edit.setTime(QTime(9, 30))
+        row.remind_start_checkbox.setChecked(True)  # 打开后自动选中「提前 10 分钟」
+        row.remind_end_checkbox.setChecked(True)
+        self.assertEqual(row.validation_error(), "")
+        draft = row.to_draft()
+        self.assertEqual(draft.end_at, datetime(2026, 10, 22, 9, 30))
+        self.assertTrue(draft.remind_start)
+        self.assertEqual(draft.remind_lead_minutes, 10)
+        self.assertTrue(draft.remind_end)
+
+        dialog._save()
+        task = self.env.service.get_task(int(dialog.saved_task_id or 0))
+        plan = task.plans[0]
+        self.assertEqual(plan.end_at, datetime(2026, 10, 22, 9, 30))
+        self.assertTrue(plan.remind_start)
+        self.assertTrue(plan.remind_end)
+        kinds = {row.kind for row in self.env.reminder_rows(int(task.id or 0))}
+        self.assertEqual(kinds, {"due", "plan", "plan_end"})
+
+    def test_dialog_rejects_end_before_start(self) -> None:
+        dialog = TaskDialog(self.env.service)
+        dialog.title_edit.setText("结束早于开始")
+        self._fill_due(dialog, 2026, 10, 25, 18, 0)
+        dialog._add_plan_row(
+            PlanDraft(
+                plan_at=datetime(2026, 10, 20, 22, 0),
+                end_at=datetime(2026, 10, 20, 21, 0),
+            )
+        )
+        row = dialog._plan_rows[0]
+        self.assertEqual(row.validation_error(), "计划的结束时间必须晚于开始时间。")
+        dialog._save()
+        self.assertIsNone(dialog.saved_task_id)
+        self.assertIn("结束时间", dialog.error_label.text())
+        self.assertEqual(self.env.task_count(), 0)
+
+    def test_editing_existing_plan_shows_end_and_switches(self) -> None:
+        end = datetime(2026, 10, 22, 9, 30)
+        task_id = self.env.create_task(
+            title="已有跨天计划",
+            due_at=datetime(2026, 10, 25, 18, 0),
+            plans=[
+                PlanDraft(
+                    plan_at=datetime(2026, 10, 20, 22, 0),
+                    end_at=end,
+                    remind_start=True,
+                    remind_end=True,
+                )
+            ],
+        )
+        task = self.env.service.get_task(task_id)
+        dialog = TaskDialog(self.env.service, task=task)
+        row = dialog._plan_rows[0]
+        self.assertTrue(row.end_checkbox.isChecked())
+        self.assertTrue(row.remind_start_checkbox.isChecked())
+        self.assertTrue(row.remind_end_checkbox.isChecked())
+        self.assertEqual(row.to_draft().end_at, end)
+
+        # 关闭结束时间后保存：end_at 被清空，结束提醒也随之关闭
+        row.end_checkbox.setChecked(False)
+        dialog._save()
+        plan = self.env.service.get_task(task_id).plans[0]
+        self.assertIsNone(plan.end_at)
+        self.assertFalse(plan.remind_end)
+        self.assertTrue(plan.remind_start)
+        self.assertNotIn("plan_end", {r.kind for r in self.env.reminder_rows(task_id)})
+
+    def test_due_reminder_switch_defaults_on(self) -> None:
+        dialog = TaskDialog(self.env.service)
+        self.assertEqual(dialog.remind_checkbox.text(), "提醒截止")
+        self.assertTrue(dialog.remind_checkbox.isChecked())
+
+    def test_plan_edit_dialog_can_set_end_time(self) -> None:
+        task_id = self.env.create_task(
+            title="单独编辑结束时间",
+            due_at=datetime(2026, 10, 25, 18, 0),
+            plans=[PlanDraft(plan_at=datetime(2026, 10, 20, 19, 0), label="原本")],
+        )
+        plan = self.env.service.get_task(task_id).plans[0]
+        dialog = PlanEditDialog(self.env.service, plan)
+        self.assertFalse(dialog.end_checkbox.isChecked())
+        dialog.end_checkbox.setChecked(True)
+        dialog.end_date_edit.setDate(QDate(2026, 10, 21))
+        dialog.end_time_edit.setTime(QTime(8, 45))
+        dialog.remind_combo.setCurrentIndex(3)  # 提前 15 分钟
+        dialog.remind_end_checkbox.setChecked(True)
+        dialog._save()
+
+        updated = self.env.service.get_task(task_id).plans[0]
+        self.assertEqual(updated.end_at, datetime(2026, 10, 21, 8, 45))
+        self.assertTrue(updated.remind_start)
+        self.assertEqual(updated.remind_lead_minutes, 15)
+        self.assertTrue(updated.remind_end)
+
+
 class TaskDetailDialogTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -187,6 +300,27 @@ class TaskDetailDialogTest(unittest.TestCase):
         self.assertEqual(self.env.service.get_task(self.task_id).status, "done")
         dialog._toggle_done()
         self.assertEqual(self.env.service.get_task(self.task_id).status, "todo")
+
+    def test_detail_shows_cross_day_range_and_end_reminder(self) -> None:
+        from PySide6.QtWidgets import QLabel
+
+        task_id = self.env.create_task(
+            title="详情里的跨天计划",
+            due_at=datetime(2026, 10, 25, 18, 0),
+            plans=[
+                PlanDraft(
+                    plan_at=datetime(2026, 10, 20, 22, 0),
+                    end_at=datetime(2026, 10, 22, 9, 30),
+                    remind_start=True,
+                    remind_end=True,
+                )
+            ],
+        )
+        dialog = TaskDetailDialog(self.env.service, task_id)
+        texts = " ".join(label.text() for label in dialog.findChildren(QLabel))
+        self.assertIn("10-20 22:00 → 10-22 09:30", texts)
+        self.assertIn("跨3天", texts)
+        self.assertIn("结束提醒", texts)
 
 
 class SettingsDialogTest(unittest.TestCase):

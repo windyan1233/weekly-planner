@@ -27,7 +27,7 @@ object ReminderNotifier {
             "任务提醒",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "截止前一天提醒、计划时间提醒"
+            description = "截止前一天提醒、计划开始 / 结束提醒"
             enableVibration(true)
         }
         manager.createNotificationChannel(channel)
@@ -50,12 +50,19 @@ object ReminderNotifier {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val text = if (reminder.kind == ReminderEntity.KIND_DUE) {
-            val due = task.dueAt?.let { Dates.toDateTimeText(it) } ?: ""
-            "明天截止 · $due"
-        } else {
-            val plan = Dates.toDateTimeText(reminder.anchorAt)
-            "计划时间 $plan 快到了"
+        val text = when (reminder.kind) {
+            ReminderEntity.KIND_DUE -> {
+                val due = task.dueAt?.let { Dates.toDateTimeText(it) } ?: ""
+                "明天截止 · $due"
+            }
+            ReminderEntity.KIND_PLAN_END -> {
+                val end = Dates.toDateTimeText(reminder.anchorAt)
+                "计划结束时间 $end 到了"
+            }
+            else -> {
+                val plan = Dates.toDateTimeText(reminder.anchorAt)
+                "计划时间 $plan 快到了"
+            }
         }
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)

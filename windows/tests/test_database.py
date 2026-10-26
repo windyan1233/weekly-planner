@@ -1,10 +1,12 @@
-"""数据库层测试：结构、持久化、备份恢复、CSV、错误处理。"""
+"""数据库层测试：结构、持久化、备份恢复、CSV、旧库迁移、错误处理。"""
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import sys
 import unittest
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -47,6 +49,18 @@ class DatabaseSchemaTest(unittest.TestCase):
         }
         self.assertIn("idx_reminders_identity", indexes)
 
+    def test_plan_time_has_end_and_reminder_columns(self) -> None:
+        columns = {
+            row["name"]: row for row in self.env.db.query("PRAGMA table_info(plan_times)")
+        }
+        for name in ("end_at", "remind_start", "remind_end"):
+            self.assertIn(name, columns)
+        self.assertIsNone(columns["end_at"]["dflt_value"])  # 可为 NULL（旧数据没有结束时间）
+        self.assertEqual(str(columns["remind_start"]["dflt_value"]), "1")
+        self.assertEqual(str(columns["remind_end"]["dflt_value"]), "0")
+        self.assertEqual(str(columns["remind_start"]["notnull"]), "1")
+        self.assertEqual(str(columns["remind_end"]["notnull"]), "1")
+
     def test_settings_defaults_and_persistence(self) -> None:
         self.assertEqual(self.env.settings.get_str("theme"), "light")
         self.assertEqual(self.env.settings.get_str("reminder_mode"), "before_due_24h")
@@ -73,6 +87,105 @@ class DatabaseSchemaTest(unittest.TestCase):
         self.env.service.delete_task(task_id)
         self.assertEqual(self.env.db.scalar("SELECT COUNT(*) FROM plan_times"), 0)
         self.assertEqual(self.env.db.scalar("SELECT COUNT(*) FROM reminders"), 0)
+
+
+class LegacyMigrationTest(unittest.TestCase):
+    """旧库（没有 end_at / remind_start / remind_end 列）要能原地升级。"""
+
+    OLD_SCHEMA = """
+    CREATE TABLE tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '', due_at TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT '学习', priority TEXT NOT NULL DEFAULT 'normal',
+        status TEXT NOT NULL DEFAULT 'todo', remind_due INTEGER NOT NULL DEFAULT 1,
+        notes TEXT NOT NULL DEFAULT '', completed_at TEXT,
+        overdue_notified INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE plan_times (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        plan_at TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
+        remind_enabled INTEGER NOT NULL DEFAULT 0,
+        remind_lead_minutes INTEGER NOT NULL DEFAULT 10,
+        done INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE reminders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL, plan_id INTEGER,
+        fire_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+        fired_at TEXT, snooze_count INTEGER NOT NULL DEFAULT 0,
+        anchor_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    """
+
+    def setUp(self) -> None:
+        base = ROOT / ".testdata" / "cases"
+        base.mkdir(parents=True, exist_ok=True)
+        self.dir = base / f"legacy_{uuid.uuid4().hex[:8]}"
+        self.dir.mkdir()
+        self.path = self.dir / "planner.db"
+        conn = sqlite3.connect(self.path)
+        try:
+            conn.executescript(self.OLD_SCHEMA)
+            conn.execute(
+                "INSERT INTO tasks (id, title, due_at, created_at, updated_at)"
+                " VALUES (1, '旧任务', '2026-11-01 18:00', '2026-10-01 10:00', '2026-10-01 10:00')"
+            )
+            conn.execute(
+                "INSERT INTO plan_times (id, task_id, plan_at, label, remind_enabled,"
+                " remind_lead_minutes, done, sort_order)"
+                " VALUES (1, 1, '2026-10-30 19:00', '旧计划', 1, 10, 0, 0)"
+            )
+            conn.execute(
+                "INSERT INTO plan_times (id, task_id, plan_at, label, remind_enabled,"
+                " remind_lead_minutes, done, sort_order)"
+                " VALUES (2, 1, '2026-10-31 20:00', '旧计划无提醒', 0, 10, 0, 1)"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_old_database_is_migrated_in_place(self) -> None:
+        db = Database(self.path)
+        try:
+            columns = {row["name"] for row in db.query("PRAGMA table_info(plan_times)")}
+            self.assertTrue({"end_at", "remind_start", "remind_end"}.issubset(columns))
+            rows = db.query("SELECT * FROM plan_times ORDER BY id")
+            self.assertEqual(len(rows), 2)
+            for row in rows:
+                self.assertIsNone(row["end_at"])  # 旧数据没有结束时间
+                self.assertEqual(row["remind_end"], 0)
+            # 旧行的开始提醒沿用原来的 remind_enabled，不会突然全部打开
+            self.assertEqual(rows[0]["remind_start"], 1)
+            self.assertEqual(rows[1]["remind_start"], 0)
+            # 旧数据仍然能读成模型
+            self.assertEqual(db.scalar("SELECT COUNT(*) FROM tasks"), 1)
+        finally:
+            db.close()
+
+    def test_migration_is_idempotent(self) -> None:
+        for _ in range(3):
+            db = Database(self.path)
+            try:
+                columns = [row["name"] for row in db.query("PRAGMA table_info(plan_times)")]
+                self.assertEqual(len(columns), len(set(columns)))
+                self.assertIn("end_at", columns)
+            finally:
+                db.close()
+
+    def test_restore_old_backup_migrates_too(self) -> None:
+        env = TestEnv("legacy_restore")
+        try:
+            env.service.restore_from(str(self.path))
+            columns = {row["name"] for row in env.db.query("PRAGMA table_info(plan_times)")}
+            self.assertTrue({"end_at", "remind_start", "remind_end"}.issubset(columns))
+            tasks = env.service.list_tasks()
+            self.assertEqual([task.title for task in tasks], ["旧任务"])
+        finally:
+            env.close()
 
 
 class PersistenceTest(unittest.TestCase):
@@ -117,6 +230,35 @@ class PersistenceTest(unittest.TestCase):
         self.assertTrue(task.sorted_plans()[0].remind_enabled)
         self.assertEqual(len(self.env.pending()), pending_before)
         self.assertEqual(self.env.settings.get_str("theme"), "dark")
+
+    def test_plan_end_time_and_reminder_switches_survive_restart(self) -> None:
+        due = datetime.now().replace(second=0, microsecond=0) + timedelta(days=5)
+        plan_at = due - timedelta(days=3)
+        end_at = plan_at + timedelta(hours=26)  # 跨天
+        task_id = self.env.create_task(
+            title="结束时间跨重启",
+            due_at=due,
+            plans=[
+                PlanDraft(
+                    plan_at=plan_at,
+                    end_at=end_at,
+                    label="跨天计划",
+                    remind_start=True,
+                    remind_lead_minutes=30,
+                    remind_end=True,
+                )
+            ],
+        )
+        self.env.reopen()
+        task = self.env.service.get_task(task_id)
+        plan = task.sorted_plans()[0]
+        self.assertEqual(plan.end_at, end_at)
+        self.assertTrue(plan.remind_start)
+        self.assertTrue(plan.remind_end)
+        self.assertEqual(plan.remind_lead_minutes, 30)
+        self.assertTrue(plan.is_cross_day)
+        kinds = {row.kind for row in self.env.pending() if row.task_id == task_id}
+        self.assertEqual(kinds, {"due", "plan", "plan_end"})
 
 
 class BackupRestoreTest(unittest.TestCase):
@@ -175,7 +317,14 @@ class CsvTest(unittest.TestCase):
             status="doing",
             notes="带,逗号",
             plans=[
-                PlanDraft(plan_at=base, label="收集资料", remind_enabled=True, remind_lead_minutes=15),
+                PlanDraft(
+                    plan_at=base,
+                    end_at=base + timedelta(days=1, hours=2),  # 跨天
+                    label="收集资料",
+                    remind_enabled=True,
+                    remind_lead_minutes=15,
+                    remind_end=True,
+                ),
                 PlanDraft(plan_at=base + timedelta(days=2), label="初稿", remind_enabled=False),
             ],
         )
@@ -202,9 +351,32 @@ class CsvTest(unittest.TestCase):
             first = task.sorted_plans()[0]
             self.assertEqual(first.label, "收集资料")
             self.assertTrue(first.remind_enabled)
+            self.assertTrue(first.remind_start)
             self.assertEqual(first.remind_lead_minutes, 15)
+            self.assertEqual(first.end_at, base + timedelta(days=1, hours=2))
+            self.assertTrue(first.remind_end)
+            second = task.sorted_plans()[1]
+            self.assertIsNone(second.end_at)
+            self.assertFalse(second.remind_start)
         finally:
             other.close()
+
+    def test_import_old_csv_plan_format_still_works(self) -> None:
+        # 旧版 CSV 的计划时间列只有「开始|说明|提前分钟」，读取时要按旧行为处理
+        csv_path = self.env.dir / "old_plans.csv"
+        csv_path.write_text(
+            "任务名称,截止时间,计划时间\n"
+            "旧格式任务,2026-10-25 18:00,2026-10-20 19:00|旧计划|10; 2026-10-21 19:00|没提醒|0\n",
+            encoding="utf-8-sig",
+        )
+        result = self.env.service.import_csv(str(csv_path))
+        self.assertEqual(result["plans"], 2)
+        task = self.env.service.list_tasks()[0]
+        first, second = task.sorted_plans()
+        self.assertIsNone(first.end_at)
+        self.assertTrue(first.remind_start)
+        self.assertFalse(first.remind_end)
+        self.assertFalse(second.remind_start)
 
     def test_import_skips_invalid_rows(self) -> None:
         csv_path = self.env.dir / "partial.csv"

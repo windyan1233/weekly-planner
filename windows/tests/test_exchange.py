@@ -92,9 +92,74 @@ class ExchangeTest(unittest.TestCase):
         self.assertIsInstance(task["dueAt"], int)
         self.assertEqual(task["priority"], "important")
         self.assertTrue(task["dueAt"] > 0)
+        self.assertIn("remindDue", task)
+        self.assertEqual(
+            {"id", "taskId", "planAt", "endAt", "remindStart", "remindEnd"},
+            set(payload["plans"][0]),
+        )
         self.assertEqual(payload["transactions"][0]["type"], "expense")
         self.assertEqual(payload["transactions"][0]["categoryKey"], "food")
         json.dumps(payload, ensure_ascii=False)
+
+    def test_plan_end_and_reminder_switches_roundtrip(self) -> None:
+        self._seed()
+        end_at = datetime(2026, 10, 21, 11, 0)
+        self.planner.execute(
+            "UPDATE plan_times SET end_at = ?, remind_start = 0, remind_end = 1 WHERE id = 1",
+            ("2026-10-21 11:00",),
+        )
+        self.planner.execute("UPDATE tasks SET remind_due = 0 WHERE id = 1")
+        payload = export_payload(self.planner, self.finance)
+
+        self.assertFalse(payload["tasks"][0]["remindDue"])
+        plan = payload["plans"][0]
+        self.assertEqual(plan["endAt"], int(end_at.timestamp() * 1000))
+        self.assertFalse(plan["remindStart"])
+        self.assertTrue(plan["remindEnd"])
+
+        other_dir = self.dir / "other_fields"
+        other_dir.mkdir()
+        planner2 = Database(other_dir / "planner.db")
+        finance2 = FinanceDatabase(other_dir / "finance.db", schedule_db_path=other_dir / "planner.db")
+        try:
+            import_payload(planner2, finance2, payload)
+            row = planner2.query_one("SELECT * FROM plan_times WHERE id = 1")
+            self.assertIsNotNone(row)
+            self.assertEqual(row["end_at"], "2026-10-21 11:00")
+            self.assertEqual(row["remind_start"], 0)
+            self.assertEqual(row["remind_end"], 1)
+            self.assertEqual(row["remind_enabled"], 0)  # 旧字段与 remind_start 同步
+            task_row = planner2.query_one("SELECT * FROM tasks WHERE id = 1")
+            self.assertEqual(task_row["remind_due"], 0)
+        finally:
+            planner2.close()
+            finance2.close()
+
+    def test_old_json_without_new_plan_fields_uses_defaults(self) -> None:
+        plan_at = datetime(2026, 10, 20, 9, 0)
+        payload = {
+            "format": FORMAT,
+            "version": 1,
+            "source": "android",
+            "tasks": [{"id": 5, "title": "旧 JSON 任务", "dueAt": int(plan_at.timestamp() * 1000)}],
+            "plans": [
+                {"id": 9, "taskId": 5, "planAt": int(plan_at.timestamp() * 1000)},
+            ],
+            "courses": [],
+            "courseSessions": [],
+            "accounts": [],
+            "transactions": [],
+            "transfers": [],
+            "reports": [],
+        }
+        import_payload(self.planner, self.finance, payload)
+        plan = self.planner.query_one("SELECT * FROM plan_times WHERE id = 9")
+        self.assertIsNotNone(plan)
+        self.assertIsNone(plan["end_at"])
+        self.assertEqual(plan["remind_start"], 1)  # 数据库默认值
+        self.assertEqual(plan["remind_end"], 0)
+        task = self.planner.query_one("SELECT * FROM tasks WHERE id = 5")
+        self.assertEqual(task["remind_due"], 1)
 
     def test_roundtrip(self) -> None:
         self._seed()

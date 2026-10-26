@@ -1,8 +1,11 @@
 package com.weeklyplanner.domain
 
+import com.weeklyplanner.data.PlanTimeEntity
+import com.weeklyplanner.data.TaskEntity
 import com.weeklyplanner.data.TransactionEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
 import java.time.LocalTime
@@ -65,6 +68,26 @@ class ReminderPlannerTest {
     private fun at(date: LocalDate, hour: Int, minute: Int): Long =
         date.atTime(LocalTime.of(hour, minute)).atZone(zone).toInstant().toEpochMilli()
 
+    private val settings = AppSettings(reminderHour = 9, reminderMinute = 0, planLeadMinutes = 10)
+
+    private fun task(dueAt: Long? = null, remindDue: Boolean = true): TaskEntity =
+        TaskEntity(id = 1L, title = "任务", dueAt = dueAt, remindDue = remindDue)
+
+    private fun plan(
+        id: Long = 7L,
+        startAt: Long,
+        endAt: Long? = null,
+        remindStart: Boolean = true,
+        remindEnd: Boolean = false
+    ): PlanTimeEntity = PlanTimeEntity(
+        id = id,
+        taskId = 1L,
+        planAt = startAt,
+        endAt = endAt,
+        remindStart = remindStart,
+        remindEnd = remindEnd
+    )
+
     @Test
     fun due_reminder_is_day_before_at_nine() {
         val due = at(LocalDate.of(2026, 9, 22), 18, 0)
@@ -81,24 +104,108 @@ class ReminderPlannerTest {
 
     @Test
     fun plan_reminder_lead_time() {
-        val plan = at(LocalDate.of(2026, 9, 21), 10, 0)
-        assertEquals(plan - 10 * 60_000L, ReminderPlanner.planFireAt(plan, 10))
-        assertEquals(plan, ReminderPlanner.planFireAt(plan, 0))
+        val planAt = at(LocalDate.of(2026, 9, 21), 10, 0)
+        assertEquals(planAt - 10 * 60_000L, ReminderPlanner.planFireAt(planAt, 10))
+        assertEquals(planAt, ReminderPlanner.planFireAt(planAt, 0))
     }
 
     @Test
     fun specs_include_due_and_plans() {
         val due = at(LocalDate.of(2026, 9, 25), 12, 0)
-        val plan = at(LocalDate.of(2026, 9, 23), 9, 0)
+        val start = at(LocalDate.of(2026, 9, 23), 9, 0)
         val specs = ReminderPlanner.specs(
-            tasks = listOf(1L to due),
-            plans = mapOf(1L to listOf(7L to plan)),
-            settings = AppSettings(reminderHour = 9, reminderMinute = 0, planLeadMinutes = 10)
+            tasks = listOf(task(dueAt = due)),
+            plans = mapOf(1L to listOf(plan(startAt = start))),
+            settings = settings
         )
         assertEquals(2, specs.size)
         assertEquals("due", specs[0].kind)
         assertEquals("plan", specs[1].kind)
         assertEquals(7L, specs[1].planKey)
+    }
+
+    // ------------------------------------------------------------ 三个开关
+
+    @Test
+    fun due_switch_off_skips_due_reminder() {
+        val due = at(LocalDate.of(2026, 9, 25), 12, 0)
+        val specs = ReminderPlanner.specs(
+            tasks = listOf(task(dueAt = due, remindDue = false)),
+            plans = emptyMap(),
+            settings = settings
+        )
+        assertTrue(specs.isEmpty())
+    }
+
+    @Test
+    fun start_switch_off_skips_plan_reminder() {
+        val start = at(LocalDate.of(2026, 9, 23), 9, 0)
+        val specs = ReminderPlanner.specs(
+            tasks = listOf(task()),
+            plans = mapOf(1L to listOf(plan(startAt = start, remindStart = false))),
+            settings = settings
+        )
+        assertTrue(specs.isEmpty())
+    }
+
+    @Test
+    fun end_reminder_fires_exactly_at_end_time() {
+        val start = at(LocalDate.of(2026, 9, 23), 22, 0)
+        val end = at(LocalDate.of(2026, 9, 24), 1, 30)
+        val specs = ReminderPlanner.specs(
+            tasks = listOf(task()),
+            plans = mapOf(
+                1L to listOf(plan(startAt = start, endAt = end, remindStart = false, remindEnd = true))
+            ),
+            settings = settings
+        )
+        assertEquals(1, specs.size)
+        assertEquals("plan_end", specs[0].kind)
+        assertEquals(7L, specs[0].planKey)
+        // 结束提醒不提前，就是结束时间本身
+        assertEquals(end, specs[0].fireAt)
+        assertEquals(end, specs[0].anchorAt)
+    }
+
+    @Test
+    fun end_reminder_needs_end_time() {
+        val start = at(LocalDate.of(2026, 9, 23), 9, 0)
+        val specs = ReminderPlanner.specs(
+            tasks = listOf(task()),
+            plans = mapOf(1L to listOf(plan(startAt = start, endAt = null, remindEnd = true))),
+            settings = settings
+        )
+        // 没有结束时间时，即使「提醒结束」开着也不会生成结束提醒，只剩开始提醒
+        assertEquals(listOf("plan"), specs.map { it.kind })
+    }
+
+    @Test
+    fun end_reminder_is_off_by_default() {
+        val start = at(LocalDate.of(2026, 9, 23), 9, 0)
+        val end = at(LocalDate.of(2026, 9, 23), 11, 0)
+        val specs = ReminderPlanner.specs(
+            tasks = listOf(task()),
+            plans = mapOf(1L to listOf(plan(startAt = start, endAt = end))),
+            settings = settings
+        )
+        assertEquals(listOf("plan"), specs.map { it.kind })
+    }
+
+    @Test
+    fun all_three_switches_on_produce_three_specs() {
+        val due = at(LocalDate.of(2026, 9, 25), 12, 0)
+        val start = at(LocalDate.of(2026, 9, 23), 22, 0)
+        val end = at(LocalDate.of(2026, 9, 24), 9, 30)
+        val specs = ReminderPlanner.specs(
+            tasks = listOf(task(dueAt = due, remindDue = true)),
+            plans = mapOf(
+                1L to listOf(plan(startAt = start, endAt = end, remindStart = true, remindEnd = true))
+            ),
+            settings = settings
+        )
+        assertEquals(listOf("due", "plan", "plan_end"), specs.map { it.kind })
+        assertEquals(ReminderPlanner.planFireAt(start, 10), specs[1].fireAt)
+        assertEquals(end, specs[2].fireAt)
     }
 }
 

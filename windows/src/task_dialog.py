@@ -75,6 +75,16 @@ def _datetime(date_edit: QDateEdit, time_edit: QTimeEdit) -> datetime:
     return datetime(d.year(), d.month(), d.day(), t.hour(), t.minute())
 
 
+def _default_end_after(start: datetime) -> datetime:
+    """打开「设置结束时间」时的默认结束时间：开始后 1 小时（可自然跨天）。"""
+    return start + timedelta(hours=1)
+
+
+def _set_datetime(date_edit: QDateEdit, time_edit: QTimeEdit, value: datetime) -> None:
+    date_edit.setDate(QDate(value.year, value.month, value.day))
+    time_edit.setTime(QTime(value.hour, value.minute))
+
+
 def _muted(text: str) -> QLabel:
     label = QLabel(text)
     label.setObjectName("Muted")
@@ -90,7 +100,7 @@ def _hint(text: str) -> QLabel:
 
 
 class PlanRow(QFrame):
-    """对话框里的一行计划时间。"""
+    """对话框里的一行计划时间（开始时间、可选结束时间、三个提醒开关）。"""
 
     removed = Signal(object)
 
@@ -99,40 +109,34 @@ class PlanRow(QFrame):
         self.setObjectName("SoftCard")
         self._plan_id = draft.id
         self._done = draft.done
-        layout = QHBoxLayout(self)
+        start_enabled = draft.start_reminder
+
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 8, 8)
         layout.setSpacing(6)
 
+        # -- 第一行：开始日期 / 时间 / 说明 -----------------------------
+        first = QHBoxLayout()
+        first.setSpacing(6)
         self.date_edit = QDateEdit(_date_of(draft.plan_at))
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         self.date_edit.setFixedWidth(128)
-        layout.addWidget(self.date_edit)
+        first.addWidget(self.date_edit)
 
         self.time_edit = QTimeEdit(_time_of(draft.plan_at))
         self.time_edit.setDisplayFormat("HH:mm")
         self.time_edit.setFixedWidth(76)
-        layout.addWidget(self.time_edit)
+        first.addWidget(self.time_edit)
 
         self.label_edit = QLineEdit(draft.label)
         self.label_edit.setPlaceholderText("这一步做什么（选填）")
-        layout.addWidget(self.label_edit, 1)
-
-        self.remind_combo = QComboBox()
-        for minutes, text in LEAD_OPTIONS:
-            prefix = "" if minutes == 0 else "开始前 "
-            self.remind_combo.addItem(text if minutes == 0 else f"{prefix}{text}", minutes)
-        self.remind_combo.setCurrentIndex(
-            _lead_index(draft.remind_lead_minutes) if draft.remind_enabled else 0
-        )
-        self.remind_combo.setFixedWidth(128)
-        self.remind_combo.setToolTip("为这个计划时间单独设置开始前提醒")
-        layout.addWidget(self.remind_combo)
+        first.addWidget(self.label_edit, 1)
 
         if draft.done:
             done_label = QLabel("已完成")
             done_label.setObjectName("Subtitle")
-            layout.addWidget(done_label)
+            first.addWidget(done_label)
 
         remove_button = QPushButton("×")
         remove_button.setObjectName("Ghost")
@@ -140,24 +144,141 @@ class PlanRow(QFrame):
         remove_button.setToolTip("移除这个计划时间（不会删除任务）")
         remove_button.setCursor(Qt.CursorShape.PointingHandCursor)
         remove_button.clicked.connect(lambda: self.removed.emit(self))
-        layout.addWidget(remove_button)
+        first.addWidget(remove_button)
+        layout.addLayout(first)
 
+        # -- 第二行：结束时间开关 + 结束日期 / 时间 ----------------------
+        second = QHBoxLayout()
+        second.setSpacing(6)
+        second.addSpacing(18)
+        self.end_checkbox = QPushButton("设置结束时间")
+        self.end_checkbox.setObjectName("Segmented")
+        self.end_checkbox.setCheckable(True)
+        self.end_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.end_checkbox.setToolTip("开启后计划会按开始～结束时间显示在周视图里，可以跨天")
+        second.addWidget(self.end_checkbox)
+
+        self.end_date_edit = QDateEdit(_date_of(draft.end_at or _default_end_after(draft.plan_at)))
+        self.end_date_edit.setCalendarPopup(True)
+        self.end_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.end_date_edit.setFixedWidth(128)
+        second.addWidget(self.end_date_edit)
+
+        self.end_time_edit = QTimeEdit(_time_of(draft.end_at or _default_end_after(draft.plan_at)))
+        self.end_time_edit.setDisplayFormat("HH:mm")
+        self.end_time_edit.setFixedWidth(76)
+        second.addWidget(self.end_time_edit)
+        second.addStretch(1)
+        layout.addLayout(second)
+
+        # -- 第三行：开始提醒 / 提前量 / 结束提醒 ------------------------
+        third = QHBoxLayout()
+        third.setSpacing(6)
+        third.addSpacing(18)
+        self.remind_start_checkbox = QPushButton("提醒开始")
+        self.remind_start_checkbox.setObjectName("Segmented")
+        self.remind_start_checkbox.setCheckable(True)
+        self.remind_start_checkbox.setChecked(start_enabled)
+        self.remind_start_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.remind_start_checkbox.setToolTip("计划开始前提醒一次（提前量在右侧选择）")
+        third.addWidget(self.remind_start_checkbox)
+
+        self.remind_combo = QComboBox()
+        for minutes, text in LEAD_OPTIONS:
+            prefix = "" if minutes == 0 else "开始前 "
+            self.remind_combo.addItem(text if minutes == 0 else f"{prefix}{text}", minutes)
+        self.remind_combo.setCurrentIndex(
+            _lead_index(draft.remind_lead_minutes) if start_enabled else 0
+        )
+        self.remind_combo.setFixedWidth(128)
+        self.remind_combo.setToolTip("为这个计划时间单独设置开始前提醒")
+        self.remind_combo.setEnabled(start_enabled)
+        third.addWidget(self.remind_combo)
+
+        self.remind_end_checkbox = QPushButton("提醒结束")
+        self.remind_end_checkbox.setObjectName("Segmented")
+        self.remind_end_checkbox.setCheckable(True)
+        self.remind_end_checkbox.setChecked(bool(draft.remind_end and draft.end_at is not None))
+        self.remind_end_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.remind_end_checkbox.setToolTip("到达结束时间时提醒一次（不提前）")
+        third.addWidget(self.remind_end_checkbox)
+        third.addStretch(1)
+        layout.addLayout(third)
+
+        # -- 联动 --------------------------------------------------------
+        self.end_checkbox.setChecked(draft.end_at is not None)
+        self._sync_end_visibility()
+        self.end_checkbox.toggled.connect(self._on_end_toggled)
+        self.remind_start_checkbox.toggled.connect(self._on_start_toggled)
+        self.remind_combo.currentIndexChanged.connect(self._on_lead_changed)
+        if start_enabled and int(self.remind_combo.currentData() or 0) == 0:
+            # 旧数据里可能出现「开始提醒开着但提前量为 0」：显示成默认的 10 分钟，
+            # 避免用户打开对话框直接保存时把提醒关掉。
+            self.remind_combo.setCurrentIndex(_lead_index(10))
+
+    # ------------------------------------------------------------------
     @property
     def plan_id(self) -> int | None:
         return self._plan_id
 
+    @property
+    def has_end(self) -> bool:
+        return self.end_checkbox.isChecked()
+
     def focus_first(self) -> None:
         self.date_edit.setFocus()
 
+    # ------------------------------------------------------------------
+    def _sync_end_visibility(self) -> None:
+        has_end = self.end_checkbox.isChecked()
+        self.end_date_edit.setVisible(has_end)
+        self.end_time_edit.setVisible(has_end)
+        self.remind_end_checkbox.setVisible(has_end)
+        if not has_end:
+            self.remind_end_checkbox.setChecked(False)
+
+    def _on_end_toggled(self, checked: bool) -> None:
+        if checked:
+            end = _datetime(self.end_date_edit, self.end_time_edit)
+            if end <= _datetime(self.date_edit, self.time_edit):
+                _set_datetime(
+                    self.end_date_edit,
+                    self.end_time_edit,
+                    _default_end_after(_datetime(self.date_edit, self.time_edit)),
+                )
+        self._sync_end_visibility()
+
+    def _on_start_toggled(self, checked: bool) -> None:
+        self.remind_combo.setEnabled(checked)
+        if checked and int(self.remind_combo.currentData() or 0) == 0:
+            self.remind_combo.setCurrentIndex(_lead_index(10))
+
+    def _on_lead_changed(self, index: int) -> None:
+        if int(self.remind_combo.currentData() or 0) == 0 and self.remind_start_checkbox.isChecked():
+            self.remind_start_checkbox.setChecked(False)
+
+    # ------------------------------------------------------------------
+    def validation_error(self) -> str:
+        if not self.has_end:
+            return ""
+        if _datetime(self.end_date_edit, self.end_time_edit) <= _datetime(self.date_edit, self.time_edit):
+            return "计划的结束时间必须晚于开始时间。"
+        return ""
+
     def to_draft(self) -> PlanDraft:
         minutes = int(self.remind_combo.currentData() or 0)
+        start_enabled = self.remind_start_checkbox.isChecked() and minutes > 0
+        end_at = _datetime(self.end_date_edit, self.end_time_edit) if self.has_end else None
         return PlanDraft(
             id=self._plan_id,
             plan_at=_datetime(self.date_edit, self.time_edit),
             label=self.label_edit.text().strip(),
-            remind_enabled=minutes > 0,
+            remind_enabled=start_enabled,
+            remind_start=start_enabled,
             remind_lead_minutes=minutes if minutes > 0 else 10,
             done=self._done,
+            end_at=end_at,
+            remind_end=bool(end_at is not None and self.remind_end_checkbox.isChecked()),
         )
 
 
@@ -199,7 +320,7 @@ class TaskDialog(QDialog):
         title = QLabel("编辑任务" if task else "新建任务")
         title.setObjectName("Title")
         header.addWidget(title)
-        header.addWidget(_hint("计划时间可以添加多个；截止时间与计划时间分别保存。"))
+        header.addWidget(_hint("计划时间可以添加多个，可设置结束时间与开始 / 结束提醒；截止时间与计划时间分别保存。"))
         root.addLayout(header)
 
         scroll = QScrollArea()
@@ -279,7 +400,7 @@ class TaskDialog(QDialog):
         self.due_time_edit.setDisplayFormat("HH:mm")
         self.due_time_edit.setFixedWidth(80)
         due_row.addWidget(self.due_time_edit)
-        self.remind_checkbox = QPushButton("截止前一天提醒")
+        self.remind_checkbox = QPushButton("提醒截止")
         self.remind_checkbox.setObjectName("Segmented")
         self.remind_checkbox.setCheckable(True)
         self.remind_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -296,7 +417,7 @@ class TaskDialog(QDialog):
 
         # -- 计划时间 ------------------------------------------------------
         plan_header = QHBoxLayout()
-        plan_header.addWidget(section_title("计划时间（打算什么时候做，可添加多个）"))
+        plan_header.addWidget(section_title("计划时间（打算什么时候做，可添加多个、可设置结束时间）"))
         plan_header.addStretch(1)
         self.add_plan_button = QPushButton("＋ 添加计划时间")
         self.add_plan_button.setObjectName("Ghost")
@@ -321,9 +442,12 @@ class TaskDialog(QDialog):
                     id=plan.id,
                     plan_at=plan.plan_at,
                     label=plan.label,
-                    remind_enabled=plan.remind_enabled,
+                    remind_enabled=plan.remind_start,
+                    remind_start=plan.remind_start,
                     remind_lead_minutes=plan.remind_lead_minutes,
                     done=plan.done,
+                    end_at=plan.end_at,
+                    remind_end=plan.remind_end,
                 )
             )
         if not task and initial_plan:
@@ -496,6 +620,12 @@ class TaskDialog(QDialog):
         self.error_label.show()
 
     def _save(self) -> None:
+        for row in self._plan_rows:
+            error = row.validation_error()
+            if error:
+                self._show_error(error)
+                row.focus_first()
+                return
         draft = self._build_draft()
         if not draft.title:
             self._show_error("请填写任务名称。")
@@ -559,8 +689,11 @@ class TaskDialog(QDialog):
             PlanDraft(
                 plan_at=plan.plan_at,
                 label=plan.label,
-                remind_enabled=plan.remind_enabled,
+                remind_enabled=plan.start_reminder,
+                remind_start=plan.start_reminder,
                 remind_lead_minutes=plan.remind_lead_minutes,
+                end_at=plan.end_at,
+                remind_end=plan.remind_end,
             )
             for plan in draft.plans
         ]
@@ -623,9 +756,40 @@ class PlanEditDialog(QDialog):
         for minutes, text in LEAD_OPTIONS:
             self.remind_combo.addItem(text if minutes == 0 else f"开始前 {text}", minutes)
         self.remind_combo.setCurrentIndex(
-            _lead_index(plan.remind_lead_minutes) if plan.remind_enabled else 0
+            _lead_index(plan.remind_lead_minutes) if plan.remind_start else 0
         )
         layout.addWidget(self.remind_combo)
+
+        # -- 结束时间（可选） -------------------------------------------
+        end_default = plan.end_at or _default_end_after(plan.plan_at)
+        self.end_checkbox = QPushButton("设置结束时间")
+        self.end_checkbox.setObjectName("Segmented")
+        self.end_checkbox.setCheckable(True)
+        self.end_checkbox.setChecked(plan.end_at is not None)
+        self.end_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self.end_checkbox)
+
+        end_row = QHBoxLayout()
+        end_row.setSpacing(8)
+        self.end_date_edit = QDateEdit(_date_of(end_default))
+        self.end_date_edit.setCalendarPopup(True)
+        self.end_date_edit.setDisplayFormat("yyyy-MM-dd")
+        end_row.addWidget(self.end_date_edit)
+        self.end_time_edit = QTimeEdit(_time_of(end_default))
+        self.end_time_edit.setDisplayFormat("HH:mm")
+        self.end_time_edit.setFixedWidth(80)
+        end_row.addWidget(self.end_time_edit)
+        layout.addLayout(end_row)
+
+        self.remind_end_checkbox = QPushButton("到达结束时间时提醒")
+        self.remind_end_checkbox.setObjectName("Segmented")
+        self.remind_end_checkbox.setCheckable(True)
+        self.remind_end_checkbox.setChecked(bool(plan.remind_end and plan.end_at is not None))
+        self.remind_end_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self.remind_end_checkbox)
+
+        self.end_checkbox.toggled.connect(self._sync_end_visibility)
+        self._sync_end_visibility()
 
         self.done_checkbox = QPushButton("这一步已完成")
         self.done_checkbox.setObjectName("Segmented")
@@ -651,19 +815,40 @@ class PlanEditDialog(QDialog):
         footer.addWidget(save)
         layout.addLayout(footer)
 
+    def _sync_end_visibility(self) -> None:
+        has_end = self.end_checkbox.isChecked()
+        self.end_date_edit.setVisible(has_end)
+        self.end_time_edit.setVisible(has_end)
+        self.remind_end_checkbox.setVisible(has_end)
+        if not has_end:
+            self.remind_end_checkbox.setChecked(False)
+
     def _save(self) -> None:
         minutes = int(self.remind_combo.currentData() or 0)
+        plan_at = _datetime(self.date_edit, self.time_edit)
+        end_at = _datetime(self.end_date_edit, self.end_time_edit) if self.end_checkbox.isChecked() else None
+        if end_at is not None and end_at <= plan_at:
+            self._error.setText("结束时间必须晚于开始时间。")
+            self._error.show()
+            return
         try:
             self._service.update_plan(
                 int(self._plan.id or 0),
-                plan_at=_datetime(self.date_edit, self.time_edit),
+                plan_at=plan_at,
+                end_at=end_at,
                 label=self.label_edit.text(),
                 remind_enabled=minutes > 0,
+                remind_start=minutes > 0,
                 remind_lead_minutes=minutes if minutes > 0 else self._plan.remind_lead_minutes,
+                remind_end=bool(end_at is not None and self.remind_end_checkbox.isChecked()),
                 done=self.done_checkbox.isChecked(),
             )
         except DatabaseError as exc:
             self._error.setText(exc.user_message())
+            self._error.show()
+            return
+        except ValidationError as exc:
+            self._error.setText(str(exc))
             self._error.show()
             return
         self.accept()
@@ -793,9 +978,12 @@ class TaskDetailDialog(QDialog):
         if history:
             content.addWidget(section_title("提醒记录"))
             for reminder in history[-4:]:
-                kind = {"due": "截止提醒", "plan": "计划提醒", "overdue": "逾期提醒"}.get(
-                    reminder.kind, reminder.kind
-                )
+                kind = {
+                    "due": "截止提醒",
+                    "plan": "计划提醒",
+                    "plan_end": "结束提醒",
+                    "overdue": "逾期提醒",
+                }.get(reminder.kind, reminder.kind)
                 state = "已发送" if reminder.status == "sent" else "已错过（超过补发窗口）"
                 when = reminder.fired_at.strftime("%m-%d %H:%M") if reminder.fired_at else "—"
                 content.addWidget(_muted(f"{kind} · 计划于 {reminder.fire_at.strftime('%m-%d %H:%M')} · {state} {when}"))
@@ -883,7 +1071,14 @@ class TaskDetailDialog(QDialog):
 
         column = QVBoxLayout()
         column.setSpacing(2)
-        time_label = QLabel(f"{plan.plan_at.strftime('%m 月 %d 日 %H:%M')}")
+        if plan.end_at is None:
+            time_text = plan.plan_at.strftime("%m 月 %d 日 %H:%M")
+        elif plan.is_cross_day:
+            time_text = plan.range_text
+        else:
+            time_text = f"{plan.plan_at.strftime('%m 月 %d 日')} {plan.range_text}"
+        time_label = QLabel(time_text)
+        time_label.setWordWrap(True)
         font = QFont(time_label.font())
         font.setWeight(QFont.Weight.DemiBold)
         time_label.setFont(font)
@@ -896,10 +1091,13 @@ class TaskDetailDialog(QDialog):
             detail.append(plan.label)
         if plan.done:
             detail.append("已完成")
-        elif plan.remind_enabled:
-            detail.append(f"开始前 {plan.remind_lead_minutes} 分钟提醒")
         else:
-            detail.append("无提醒")
+            if plan.remind_start:
+                detail.append(f"开始前 {plan.remind_lead_minutes} 分钟提醒")
+            else:
+                detail.append("无开始提醒")
+            if plan.end_reminder_at() is not None:
+                detail.append("结束提醒")
         if task.is_overdue(now) and not task.is_done:
             detail.append("任务已逾期")
         column.addWidget(_muted(" · ".join(detail)))

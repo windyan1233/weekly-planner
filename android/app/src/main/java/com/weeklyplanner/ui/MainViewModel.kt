@@ -18,6 +18,7 @@ import com.weeklyplanner.data.TransactionEntity
 import com.weeklyplanner.domain.AppSettings
 import com.weeklyplanner.domain.Dates
 import com.weeklyplanner.domain.MonthFigures
+import com.weeklyplanner.domain.PlanDraft
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -36,7 +37,7 @@ class MainViewModel(private val app: WeeklyApp) : ViewModel() {
 
     var openTaskId by mutableStateOf<Long?>(null)
     var editorTask by mutableStateOf<TaskEntity?>(null)
-    var editorPlans by mutableStateOf<List<Long>>(emptyList())
+    var editorPlans by mutableStateOf<List<PlanDraft>>(emptyList())
     var showQuickAdd by mutableStateOf(false)
     var quickAddType by mutableStateOf(TransactionEntity.TYPE_EXPENSE)
     var quickAddEditing by mutableStateOf<TransactionEntity?>(null)
@@ -139,9 +140,12 @@ class MainViewModel(private val app: WeeklyApp) : ViewModel() {
     }
 
     fun editTask(task: TaskEntity) {
-        val plans = plans.value.filter { it.taskId == task.id }.map { it.planAt }
+        val drafts = plans.value
+            .filter { it.taskId == task.id }
+            .sortedBy { it.planAt }
+            .map { it.toDraft() }
         editorTask = task
-        editorPlans = plans
+        editorPlans = drafts
         openTaskId = null
     }
 
@@ -150,12 +154,16 @@ class MainViewModel(private val app: WeeklyApp) : ViewModel() {
         editorPlans = emptyList()
     }
 
-    fun saveTask(task: TaskEntity, planTimes: List<Long>) {
+    fun saveTask(task: TaskEntity, planDrafts: List<PlanDraft>) {
         viewModelScope.launch {
             val saved = task.copy(updatedAt = System.currentTimeMillis())
+            // 结束时间为空时不允许留下「提醒结束」，否则会生成无效提醒。
+            val normalized = planDrafts
+                .map { if (it.endAt == null) it.copy(remindEnd = false) else it }
+                .sortedBy { it.startAt }
             scheduleRepository.saveTask(
                 saved,
-                planTimes.sorted().map { PlanTimeEntity(taskId = task.id, planAt = it) }
+                normalized.map { it.toEntity(task.id) }
             )
             closeEditor()
             openTaskId = null
@@ -325,3 +333,20 @@ class MainViewModel(private val app: WeeklyApp) : ViewModel() {
         override fun <T : ViewModel> create(modelClass: Class<T>): T = MainViewModel(app) as T
     }
 }
+
+private fun PlanTimeEntity.toDraft(): PlanDraft = PlanDraft(
+    id = id,
+    startAt = planAt,
+    endAt = endAt,
+    remindStart = remindStart,
+    remindEnd = remindEnd
+)
+
+private fun PlanDraft.toEntity(taskId: Long): PlanTimeEntity = PlanTimeEntity(
+    id = id,
+    taskId = taskId,
+    planAt = startAt,
+    endAt = endAt,
+    remindStart = remindStart,
+    remindEnd = remindEnd
+)

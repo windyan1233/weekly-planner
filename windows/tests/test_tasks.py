@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 import unittest
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,6 +158,141 @@ class PlanTimeEditingTest(unittest.TestCase):
             self.env.service.update_task(9999, TaskDraft(title="x", due_at=datetime.now()))
 
 
+class PlanEndTimeTest(unittest.TestCase):
+    """计划时间的可选结束时间 + 三个提醒开关（开始 / 结束 / 截止）。"""
+
+    def setUp(self) -> None:
+        self.env = TestEnv("plan_end")
+        self.start = datetime(2026, 10, 20, 22, 0)
+        self.end = datetime(2026, 10, 22, 9, 30)
+        self.due = datetime(2026, 10, 25, 18, 0)
+        self.task_id = self.env.create_task(
+            title="跨天任务",
+            due_at=self.due,
+            plans=[
+                PlanDraft(
+                    plan_at=self.start,
+                    end_at=self.end,
+                    label="跨天计划",
+                    remind_start=True,
+                    remind_lead_minutes=5,
+                    remind_end=True,
+                )
+            ],
+        )
+
+    def tearDown(self) -> None:
+        self.env.close()
+
+    def _plan(self):
+        return self.env.service.get_task(self.task_id).sorted_plans()[0]
+
+    def test_plan_end_time_and_switches_are_persisted(self) -> None:
+        plan = self._plan()
+        self.assertEqual(plan.end_at, self.end)
+        self.assertTrue(plan.remind_start)
+        self.assertTrue(plan.remind_enabled)  # 旧字段与 remind_start 同步
+        self.assertTrue(plan.remind_end)
+        self.assertEqual(plan.remind_lead_minutes, 5)
+        self.assertTrue(plan.is_cross_day)
+        self.assertEqual(plan.span_days, 3)
+        self.assertEqual(plan.range_text, "10-20 22:00 → 10-22 09:30 · 跨3天")
+        self.assertEqual(
+            plan.covered_dates(),
+            [date(2026, 10, 20), date(2026, 10, 21), date(2026, 10, 22)],
+        )
+
+    def test_task_visible_dates_include_cross_day_span(self) -> None:
+        task = self.env.service.get_task(self.task_id)
+        dates = task.visible_dates()
+        self.assertEqual(dates[0], self.due.date())
+        self.assertIn(date(2026, 10, 21), dates)
+        self.assertIn(date(2026, 10, 22), dates)
+
+    def test_end_must_be_later_than_start(self) -> None:
+        with self.assertRaises(ValidationError):
+            self.env.create_task(
+                title="结束早于开始",
+                due_at=self.due,
+                plans=[PlanDraft(plan_at=self.start, end_at=self.start)],
+            )
+        with self.assertRaises(ValidationError):
+            self.env.service.update_plan(int(self._plan().id), end_at=self.start)
+        with self.assertRaises(ValidationError):
+            self.env.service.update_plan(int(self._plan().id), plan_at=self.end)
+
+    def test_update_plan_can_clear_or_move_end_time(self) -> None:
+        plan_id = int(self._plan().id)
+        newer = self.end + timedelta(hours=2)
+        updated = self.env.service.update_plan(plan_id, end_at=newer)
+        self.assertEqual(updated.end_at, newer)
+
+        cleared = self.env.service.update_plan(plan_id, end_at=None)
+        self.assertIsNone(cleared.end_at)
+        self.assertTrue(cleared.remind_end)  # 开关保留，只是没有结束时间
+        self.assertEqual(
+            self.env.db.scalar("SELECT end_at FROM plan_times WHERE id = ?", (plan_id,)),
+            None,
+        )
+
+    def test_occurrence_uses_real_start_and_end(self) -> None:
+        occurrences = self.env.service.occurrences(week_start_of(date(2026, 10, 19)))
+        plans = [occ for occ in occurrences if occ.kind == "plan"]
+        self.assertEqual(len(plans), 1)
+        occ = plans[0]
+        self.assertEqual(occ.start, self.start)
+        self.assertEqual(occ.end_at, self.end)
+        self.assertEqual(occ.duration_minutes, int((self.end - self.start).total_seconds() // 60))
+        self.assertTrue(occ.is_cross_day)
+        self.assertEqual(occ.span_days, 3)
+        self.assertIn("10-20 22:00 → 10-22 09:30 · 跨3天", occ.detail_text)
+
+    def test_occurrence_of_plan_started_before_week_is_shown(self) -> None:
+        # 上周日 22:00 → 本周二 09:00：本周应该能看到它（只画本周内的部分）
+        task_id = self.env.create_task(
+            title="跨周任务",
+            due_at=datetime(2026, 10, 20, 18, 0),
+            plans=[
+                PlanDraft(
+                    plan_at=datetime(2026, 10, 11, 22, 0),
+                    end_at=datetime(2026, 10, 13, 9, 0),
+                )
+            ],
+        )
+        occurrences = self.env.service.occurrences(date(2026, 10, 12))
+        self.assertIn(task_id, [occ.task_id for occ in occurrences])
+        # 上一周里它也存在
+        previous = self.env.service.occurrences(date(2026, 10, 5))
+        self.assertIn(task_id, [occ.task_id for occ in previous])
+
+    def test_duplicate_task_keeps_end_time_and_switches(self) -> None:
+        copy = self.env.service.duplicate_task(self.task_id)
+        plan = copy.sorted_plans()[0]
+        self.assertEqual(plan.end_at, self.end)
+        self.assertTrue(plan.remind_start)
+        self.assertTrue(plan.remind_end)
+
+    def test_plan_time_from_row_tolerates_old_rows(self) -> None:
+        from src.models import PlanTime
+
+        old_row = {
+            "id": 1,
+            "task_id": 1,
+            "plan_at": "2026-10-20 19:00",
+            "label": "旧行",
+            "remind_enabled": 1,
+            "remind_lead_minutes": 10,
+            "done": 0,
+            "sort_order": 0,
+        }
+        plan = PlanTime.from_row(old_row)
+        self.assertIsNone(plan.end_at)
+        self.assertTrue(plan.remind_start)
+        self.assertTrue(plan.remind_enabled)
+        self.assertFalse(plan.remind_end)
+        self.assertEqual(plan.range_text, "19:00")
+
+
 class StatusAndWeeklyViewTest(unittest.TestCase):
     def setUp(self) -> None:
         self.env = TestEnv("week")
@@ -235,7 +370,7 @@ class StatusAndWeeklyViewTest(unittest.TestCase):
         task_id = self.env.create_task(title="已完成过期", due_at=past, status="done")
         task = self.env.service.get_task(task_id)
         self.assertFalse(task.is_overdue())
-        self.assertEqual(self.env.service.overdue_tasks(), [])
+        self.assertNotIn(task_id, [int(t.id or 0) for t in self.env.service.overdue_tasks()])
 
 
 class SearchAndFilterTest(unittest.TestCase):

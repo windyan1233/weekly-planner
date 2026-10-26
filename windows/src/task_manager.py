@@ -35,6 +35,21 @@ logger = get_logger("service")
 PLAN_DURATION_MINUTES = 45
 DUE_DURATION_MINUTES = 30
 
+# 用于区分「没有传这个参数」和「显式传 None（清空结束时间）」
+_UNSET = object()
+
+
+def _plan_intersects(plan: PlanTime, start: datetime, end: datetime) -> bool:
+    """计划时间（可能跨天）是否与给定时间范围有交集。"""
+    if plan.end_at is None:
+        return start <= plan.plan_at <= end
+    return plan.plan_at <= end and plan.end_at >= start
+
+
+def _validate_plan_range(plan_at: datetime, end_at: datetime | None) -> None:
+    if end_at is not None and end_at <= plan_at:
+        raise ValidationError("计划的结束时间必须晚于开始时间。")
+
 
 class ValidationError(ValueError):
     """用户输入不合法。"""
@@ -210,14 +225,20 @@ class PlannerService:
     @staticmethod
     def _insert_plans(conn, task_id: int, plans: Sequence[PlanDraft]) -> None:
         for index, plan in enumerate(sorted(plans, key=lambda p: p.plan_at)):
+            _validate_plan_range(plan.plan_at, plan.end_at)
+            remind_start = plan.start_reminder
             conn.execute(
-                "INSERT INTO plan_times(task_id, plan_at, label, remind_enabled,"
-                " remind_lead_minutes, done, sort_order) VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO plan_times(task_id, plan_at, end_at, label, remind_enabled,"
+                " remind_start, remind_end, remind_lead_minutes, done, sort_order)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     format_dt(plan.plan_at),
+                    format_dt(plan.end_at) if plan.end_at is not None else None,
                     (plan.label or "").strip(),
-                    1 if plan.remind_enabled else 0,
+                    1 if remind_start else 0,
+                    1 if remind_start else 0,
+                    1 if plan.remind_end else 0,
                     max(0, int(plan.remind_lead_minutes)),
                     1 if plan.done else 0,
                     index,
@@ -275,25 +296,32 @@ class PlannerService:
         for stale in existing_ids - keep_ids:
             conn.execute("DELETE FROM plan_times WHERE id = ?", (stale,))
         for index, plan in enumerate(sorted(drafts, key=lambda p: p.plan_at)):
+            _validate_plan_range(plan.plan_at, plan.end_at)
+            remind_start = plan.start_reminder
             values = (
                 format_dt(plan.plan_at),
+                format_dt(plan.end_at) if plan.end_at is not None else None,
                 (plan.label or "").strip(),
-                1 if plan.remind_enabled else 0,
+                1 if remind_start else 0,
+                1 if remind_start else 0,
+                1 if plan.remind_end else 0,
                 max(0, int(plan.remind_lead_minutes)),
                 1 if plan.done else 0,
                 index,
             )
             if plan.id is not None and int(plan.id) in existing_ids:
                 conn.execute(
-                    "UPDATE plan_times SET plan_at = ?, label = ?, remind_enabled = ?,"
+                    "UPDATE plan_times SET plan_at = ?, end_at = ?, label = ?,"
+                    " remind_enabled = ?, remind_start = ?, remind_end = ?,"
                     " remind_lead_minutes = ?, done = ?, sort_order = ? WHERE id = ?",
                     values + (int(plan.id),),
                 )
             else:
                 # 新增的计划时间（plan.id 为 None，或来自别的任务）
                 conn.execute(
-                    "INSERT INTO plan_times(task_id, plan_at, label, remind_enabled,"
-                    " remind_lead_minutes, done, sort_order) VALUES (?,?,?,?,?,?,?)",
+                    "INSERT INTO plan_times(task_id, plan_at, end_at, label, remind_enabled,"
+                    " remind_start, remind_end, remind_lead_minutes, done, sort_order)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (task_id,) + values,
                 )
 
@@ -307,18 +335,28 @@ class PlannerService:
         label: str = "",
         remind_enabled: bool = False,
         remind_lead_minutes: int = 10,
+        *,
+        end_at: datetime | None = None,
+        remind_start: bool | None = None,
+        remind_end: bool = False,
     ) -> PlanTime:
+        remind_start_enabled = remind_enabled if remind_start is None else remind_start
+        _validate_plan_range(plan_at, end_at)
         task = self.get_task(task_id)
         order = len(task.plans)
         with self.db.transaction() as conn:
             cursor = conn.execute(
-                "INSERT INTO plan_times(task_id, plan_at, label, remind_enabled,"
-                " remind_lead_minutes, done, sort_order) VALUES (?,?,?,?,?,0,?)",
+                "INSERT INTO plan_times(task_id, plan_at, end_at, label, remind_enabled,"
+                " remind_start, remind_end, remind_lead_minutes, done, sort_order)"
+                " VALUES (?,?,?,?,?,?,?,?,0,?)",
                 (
                     task_id,
                     format_dt(plan_at),
+                    format_dt(end_at) if end_at is not None else None,
                     label.strip(),
-                    1 if remind_enabled else 0,
+                    1 if remind_start_enabled else 0,
+                    1 if remind_start_enabled else 0,
+                    1 if (remind_end and end_at is not None) else 0,
                     max(0, int(remind_lead_minutes)),
                     order,
                 ),
@@ -336,6 +374,9 @@ class PlannerService:
         remind_enabled: bool | None = None,
         remind_lead_minutes: int | None = None,
         done: bool | None = None,
+        end_at: object = _UNSET,
+        remind_start: bool | None = None,
+        remind_end: bool | None = None,
     ) -> PlanTime:
         plan = repository.fetch_plan(self.db, plan_id)
         if plan is None:
@@ -345,12 +386,22 @@ class PlannerService:
         if plan_at is not None:
             changes.append("plan_at = ?")
             params.append(format_dt(plan_at))
+        if end_at is not _UNSET:
+            end_value = end_at if isinstance(end_at, datetime) else None
+            changes.append("end_at = ?")
+            params.append(format_dt(end_value) if end_value is not None else None)
         if label is not None:
             changes.append("label = ?")
             params.append(label.strip())
-        if remind_enabled is not None:
+        start_flag = remind_start if remind_start is not None else remind_enabled
+        if start_flag is not None:
             changes.append("remind_enabled = ?")
-            params.append(1 if remind_enabled else 0)
+            params.append(1 if start_flag else 0)
+            changes.append("remind_start = ?")
+            params.append(1 if start_flag else 0)
+        if remind_end is not None:
+            changes.append("remind_end = ?")
+            params.append(1 if remind_end else 0)
         if remind_lead_minutes is not None:
             changes.append("remind_lead_minutes = ?")
             params.append(max(0, int(remind_lead_minutes)))
@@ -359,6 +410,13 @@ class PlannerService:
             params.append(1 if done else 0)
         if not changes:
             return plan
+        # 校验「结束晚于开始」，用更新后的最终值判断
+        final_start = plan_at if plan_at is not None else plan.plan_at
+        if end_at is not _UNSET:
+            final_end = end_at if isinstance(end_at, datetime) else None
+        else:
+            final_end = plan.end_at
+        _validate_plan_range(final_start, final_end)
         params.append(plan_id)
         with self.db.transaction() as conn:
             conn.execute(f"UPDATE plan_times SET {', '.join(changes)} WHERE id = ?", params)
@@ -428,9 +486,12 @@ class PlannerService:
                 id=None,
                 plan_at=plan.plan_at + shift,
                 label=plan.label,
-                remind_enabled=plan.remind_enabled,
+                remind_enabled=plan.remind_start,
+                remind_start=plan.remind_start,
                 remind_lead_minutes=plan.remind_lead_minutes,
                 done=False,
+                end_at=(plan.end_at + shift) if plan.end_at is not None else None,
+                remind_end=plan.remind_end,
             )
             for plan in task.sorted_plans()
         ]
@@ -475,8 +536,12 @@ class PlannerService:
         for task in tasks:
             index_total = len(task.plans)
             for order, plan in enumerate(task.sorted_plans(), start=1):
-                if not (start <= plan.plan_at <= end):
+                if not _plan_intersects(plan, start, end):
                     continue
+                # 有结束时间就按真实起止绘制；旧计划保持原来的固定时长短块
+                duration = PLAN_DURATION_MINUTES
+                if plan.end_at is not None:
+                    duration = max(1, int((plan.end_at - plan.plan_at).total_seconds() // 60))
                 result.append(
                     Occurrence(
                         task_id=int(task.id or 0),
@@ -487,7 +552,8 @@ class PlannerService:
                         plan=plan,
                         plan_index=order,
                         plan_total=index_total,
-                        duration_minutes=PLAN_DURATION_MINUTES,
+                        duration_minutes=duration,
+                        end_at=plan.end_at,
                     )
                 )
             if start <= task.due_at <= end:
@@ -518,7 +584,7 @@ class PlannerService:
                 events += 1
                 in_week = True
             for plan in task.plans:
-                if start <= plan.plan_at <= end:
+                if _plan_intersects(plan, start, end):
                     events += 1
                     in_week = True
             if in_week and task.is_done:

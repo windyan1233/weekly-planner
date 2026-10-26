@@ -10,6 +10,9 @@
 }
 
 金额一律用「分」；时间一律用 epoch 毫秒（本地时区换算）。
+计划时间额外携带 ``endAt`` / ``remindStart`` / ``remindEnd``，任务携带
+``remindDue``；旧 JSON 缺少这些字段时使用默认值（无结束时间、开始提醒开、
+结束提醒关、截止提醒开）。
 导入是「整体替换」：会清空当前任务、计划时间、课程、账目、资金分区和月报，
 然后写入 JSON 里的数据。
 """
@@ -71,6 +74,15 @@ def _has_table(db, name: str) -> bool:
     return row is not None
 
 
+def _row_value(row, key: str, default=None):
+    """读取可能不存在的新列（导入旧备份 / 旧数据库时不会炸）。"""
+    try:
+        keys = row.keys()
+    except AttributeError:  # pragma: no cover - 防御性
+        keys = ()
+    return row[key] if key in keys else default
+
+
 # ---------------------------------------------------------------------------
 # 导出
 # ---------------------------------------------------------------------------
@@ -94,6 +106,7 @@ def export_payload(planner_db, finance_db) -> dict[str, Any]:
                 "kind": row["category"] or "学习",
                 "priority": row["priority"] or "normal",
                 "dueAt": _dt_to_millis(row["due_at"]),
+                "remindDue": bool(_row_value(row, "remind_due", 1)),
                 "done": row["status"] == "done",
                 "createdAt": _dt_to_millis(row["created_at"]) or 0,
                 "updatedAt": _dt_to_millis(row["updated_at"]) or 0,
@@ -106,6 +119,11 @@ def export_payload(planner_db, finance_db) -> dict[str, Any]:
             "id": int(row["id"]),
             "taskId": int(row["task_id"]),
             "planAt": _dt_to_millis(row["plan_at"]) or 0,
+            "endAt": _dt_to_millis(_row_value(row, "end_at")),
+            "remindStart": bool(
+                _row_value(row, "remind_start", _row_value(row, "remind_enabled", 0))
+            ),
+            "remindEnd": bool(_row_value(row, "remind_end", 0)),
         }
         for row in planner_db.query("SELECT * FROM plan_times ORDER BY id")
     ]
@@ -243,7 +261,7 @@ def import_payload(planner_db, finance_db, payload: dict[str, Any]) -> dict[str,
                 """
                 INSERT INTO tasks (id, title, description, due_at, category, priority, status,
                                    remind_due, notes, completed_at, overdue_notified, created_at, updated_at)
-                VALUES (?, ?, '', ?, ?, ?, ?, 1, ?, ?, 0, ?, ?)
+                VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 """,
                 (
                     int(item["id"]),
@@ -252,6 +270,7 @@ def import_payload(planner_db, finance_db, payload: dict[str, Any]) -> dict[str,
                     item.get("kind") or "学习",
                     item.get("priority") or "normal",
                     status,
+                    1 if item.get("remindDue", True) else 0,
                     note,
                     completed_at,
                     _millis_to_dt(item.get("createdAt")) or _now_iso(),
@@ -263,16 +282,28 @@ def import_payload(planner_db, finance_db, payload: dict[str, Any]) -> dict[str,
             task_id = int(item.get("taskId", 0))
             if task_id not in known_task_ids:
                 continue
+            plan_at_text = _millis_to_dt(item.get("planAt")) or _now_iso()
+            end_text = _millis_to_dt(item.get("endAt")) or None
+            if end_text is not None and end_text <= plan_at_text:
+                end_text = None
+            # 旧 JSON 没有这些字段：按数据库默认值处理（开始提醒开、结束提醒关）
+            remind_start = 1 if item.get("remindStart", True) else 0
+            remind_end = 1 if (item.get("remindEnd", False) and end_text) else 0
             connection.execute(
                 """
-                INSERT INTO plan_times (id, task_id, plan_at, label, remind_enabled,
-                                        remind_lead_minutes, done, sort_order)
-                VALUES (?, ?, ?, '', 0, 10, 0, ?)
+                INSERT INTO plan_times (id, task_id, plan_at, end_at, label, remind_enabled,
+                                        remind_start, remind_end, remind_lead_minutes,
+                                        done, sort_order)
+                VALUES (?, ?, ?, ?, '', ?, ?, ?, 10, 0, ?)
                 """,
                 (
                     int(item["id"]),
                     task_id,
-                    _millis_to_dt(item.get("planAt")) or _now_iso(),
+                    plan_at_text,
+                    end_text,
+                    remind_start,
+                    remind_start,
+                    remind_end,
                     index,
                 ),
             )

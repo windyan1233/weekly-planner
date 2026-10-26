@@ -116,6 +116,117 @@ class ReminderSyncTest(unittest.TestCase):
         fires = sorted(row.fire_at for row in plan_rows)
         self.assertEqual(fires, [plan_a - timedelta(minutes=10), plan_b - timedelta(minutes=30)])
 
+    # -- 开始 / 结束提醒开关 ------------------------------------------
+    def _pending_kinds(self, task_id: int) -> list[str]:
+        return [
+            row.kind
+            for row in self.env.reminder_rows(task_id, include_history=False)
+            if row.status == "pending"
+        ]
+
+    def test_start_reminder_requires_switch_and_uses_lead_minutes(self) -> None:
+        due = rounded(NOW + timedelta(days=8))
+        plan_at = rounded(NOW + timedelta(days=2))
+        task_id = self.env.create_task(
+            title="开始提醒",
+            due_at=due,
+            plans=[PlanDraft(plan_at=plan_at, remind_start=True, remind_lead_minutes=15)],
+        )
+        plan_id = int(self.env.service.get_task(task_id).plans[0].id)
+        plan_rows = [row for row in self.env.reminder_rows(task_id) if row.kind == "plan"]
+        self.assertEqual(len(plan_rows), 1)
+        self.assertEqual(plan_rows[0].fire_at, plan_at - timedelta(minutes=15))
+
+        self.env.service.update_plan(plan_id, remind_start=False)
+        self.assertNotIn("plan", self._pending_kinds(task_id))
+
+        self.env.service.update_plan(plan_id, remind_start=True)
+        self.assertIn("plan", self._pending_kinds(task_id))
+
+    def test_end_reminder_requires_end_time_and_switch(self) -> None:
+        due = rounded(NOW + timedelta(days=9))
+        plan_at = rounded(NOW + timedelta(days=2))
+        end_at = plan_at + timedelta(hours=2)
+
+        without_switch = self.env.create_task(
+            title="只设置结束时间",
+            due_at=due,
+            plans=[PlanDraft(plan_at=plan_at, end_at=end_at, remind_start=False, remind_end=False)],
+        )
+        self.assertNotIn("plan_end", self._pending_kinds(without_switch))
+
+        with_switch = self.env.create_task(
+            title="结束提醒打开",
+            due_at=due,
+            plans=[PlanDraft(plan_at=plan_at, end_at=end_at, remind_start=False, remind_end=True)],
+        )
+        end_rows = [row for row in self.env.reminder_rows(with_switch) if row.kind == "plan_end"]
+        self.assertEqual(len(end_rows), 1)
+        # 结束提醒 = 结束时间，不提前
+        self.assertEqual(end_rows[0].fire_at, end_at)
+
+        # 没有 end_at 时，即使开关打开也不产生结束提醒
+        no_end = self.env.create_task(
+            title="没有结束时间",
+            due_at=due,
+            plans=[PlanDraft(plan_at=plan_at, remind_start=False, remind_end=True)],
+        )
+        self.assertNotIn("plan_end", self._pending_kinds(no_end))
+
+    def test_disabling_end_reminder_cancels_pending(self) -> None:
+        due = rounded(NOW + timedelta(days=9))
+        plan_at = rounded(NOW + timedelta(days=2))
+        end_at = plan_at + timedelta(hours=2)
+        task_id = self.env.create_task(
+            title="关闭结束提醒",
+            due_at=due,
+            plans=[PlanDraft(plan_at=plan_at, end_at=end_at, remind_end=True)],
+        )
+        plan_id = int(self.env.service.get_task(task_id).plans[0].id)
+        self.assertIn("plan_end", self._pending_kinds(task_id))
+
+        self.env.service.update_plan(plan_id, remind_end=False)
+        self.assertNotIn("plan_end", self._pending_kinds(task_id))
+
+        self.env.service.update_plan(plan_id, remind_end=True)
+        self.assertIn("plan_end", self._pending_kinds(task_id))
+        # 清掉结束时间后，旧的结束提醒也要取消
+        self.env.service.update_plan(plan_id, end_at=None)
+        self.assertNotIn("plan_end", self._pending_kinds(task_id))
+
+    def test_changing_end_time_replaces_end_reminder(self) -> None:
+        due = rounded(NOW + timedelta(days=9))
+        plan_at = rounded(NOW + timedelta(days=2))
+        old_end = plan_at + timedelta(hours=2)
+        task_id = self.env.create_task(
+            title="改结束时间",
+            due_at=due,
+            plans=[PlanDraft(plan_at=plan_at, end_at=old_end, remind_end=True)],
+        )
+        plan_id = int(self.env.service.get_task(task_id).plans[0].id)
+        new_end = plan_at + timedelta(hours=5)
+        self.env.service.update_plan(plan_id, end_at=new_end)
+
+        pending_end = [
+            row
+            for row in self.env.reminder_rows(task_id, include_history=False)
+            if row.kind == "plan_end"
+        ]
+        self.assertEqual(len(pending_end), 1)
+        self.assertEqual(pending_end[0].fire_at, new_end)
+
+    def test_plan_done_cancels_end_reminder(self) -> None:
+        due = rounded(NOW + timedelta(days=9))
+        plan_at = rounded(NOW + timedelta(days=2))
+        task_id = self.env.create_task(
+            title="完成计划",
+            due_at=due,
+            plans=[PlanDraft(plan_at=plan_at, end_at=plan_at + timedelta(hours=2), remind_end=True)],
+        )
+        plan_id = int(self.env.service.get_task(task_id).plans[0].id)
+        self.env.service.set_plan_done(plan_id, True)
+        self.assertNotIn("plan_end", self._pending_kinds(task_id))
+
     def test_completing_task_cancels_pending_reminders(self) -> None:
         task_id = self.env.create_task(
             title="完成后取消",
@@ -264,6 +375,53 @@ class ClaimTest(unittest.TestCase):
 
         # 同一次运行内重复检查不会重复通知
         self.assertEqual(self.env.engine.claim_due(fire_at + timedelta(minutes=1)), [])
+
+    def test_end_reminder_fires_at_end_time_without_prefire(self) -> None:
+        due = rounded(NOW + timedelta(days=10))
+        plan_at = rounded(NOW + timedelta(hours=2))
+        end_at = plan_at + timedelta(hours=1)
+        task_id = self.env.create_task(
+            title="结束提醒测试",
+            due_at=due,
+            plans=[PlanDraft(plan_at=plan_at, end_at=end_at, remind_start=False, remind_end=True)],
+        )
+        # 结束提醒不提前：结束前一分钟什么都不发
+        self.assertEqual(self.env.engine.claim_due(end_at - timedelta(minutes=1)), [])
+
+        fired = self.env.engine.claim_due(end_at)
+        self.assertEqual(len(fired), 1)
+        self.assertEqual(fired[0].kind, "plan_end")
+        self.assertEqual(int(fired[0].task.id or 0), task_id)
+        message = compose_message(fired[0], end_at)
+        self.assertIn("计划结束", message.title)
+        self.assertIn("计划结束", message.body)
+        self.assertIn("计划已到结束时间", message.body)
+        self.assertEqual(self.env.engine.claim_due(end_at + timedelta(minutes=1)), [])
+
+    def test_start_and_end_reminders_are_separate(self) -> None:
+        due = rounded(NOW + timedelta(days=10))
+        plan_at = rounded(NOW + timedelta(hours=3))
+        end_at = plan_at + timedelta(hours=2)
+        self.env.create_task(
+            title="开始和结束都要提醒",
+            due_at=due,
+            plans=[
+                PlanDraft(
+                    plan_at=plan_at,
+                    end_at=end_at,
+                    remind_start=True,
+                    remind_lead_minutes=10,
+                    remind_end=True,
+                )
+            ],
+        )
+        kinds = {row.kind for row in self.env.pending()}
+        self.assertEqual(kinds, {"due", "plan", "plan_end"})
+
+        fired_start = self.env.engine.claim_due(plan_at - timedelta(minutes=10))
+        self.assertEqual([f.kind for f in fired_start], ["plan"])
+        fired_end = self.env.engine.claim_due(end_at)
+        self.assertEqual([f.kind for f in fired_end], ["plan_end"])
 
     def test_no_duplicate_after_restart(self) -> None:
         due = rounded(NOW + timedelta(hours=2))

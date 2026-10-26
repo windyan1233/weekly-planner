@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Mapping
 
-from .time_utils import format_dt, parse_dt, remaining_label
+from .time_utils import covered_dates, format_dt, parse_dt, plan_range_label, remaining_label
 
 # --------------------------------------------------------------------------
 # 枚举元数据
@@ -62,6 +62,21 @@ _CATEGORY_FALLBACK = ("#A78BFA", "#38BDF8", "#F472B6", "#34D399", "#FBBF24", "#8
 KIND_PLAN = "plan"
 KIND_DUE = "due"
 KIND_OVERDUE = "overdue"
+KIND_PLAN_END = "plan_end"
+
+
+def _row_value(row: Mapping[str, Any], key: str, default: Any = None) -> Any:
+    """从 sqlite3.Row / dict 里取一个可能不存在的新列（兼容旧库旧行）。"""
+    try:
+        keys = row.keys()
+    except AttributeError:  # pragma: no cover - 防御性
+        keys = ()
+    return row[key] if key in keys else default
+
+
+def _row_flag(row: Mapping[str, Any], key: str, default: bool = False) -> bool:
+    value = _row_value(row, key, None)
+    return default if value is None else bool(value)
 
 
 def category_color(name: str) -> str:
@@ -84,21 +99,60 @@ def status_label(value: str) -> str:
 # --------------------------------------------------------------------------
 @dataclass
 class PlanTime:
-    """任务下的一个计划时间（一个任务可以有 0..N 个）。"""
+    """任务下的一个计划时间（一个任务可以有 0..N 个）。
+
+    开始时间 ``plan_at`` 必填；``end_at`` 可选（旧数据为空，表示不设置结束）。
+    三个提醒开关相互独立：开始提醒（``remind_start``，提前 ``remind_lead_minutes``
+    分钟）、结束提醒（``remind_end``，到结束时间时提醒）、截止提醒在 :class:`Task`
+    的 ``remind_due`` 上。
+    """
 
     id: int | None = None
     task_id: int | None = None
     plan_at: datetime = field(default_factory=datetime.now)
     label: str = ""
-    remind_enabled: bool = False
+    remind_enabled: bool = False  # 旧字段：与 remind_start 保持同步
     remind_lead_minutes: int = 10
     done: bool = False
     sort_order: int = 0
+    end_at: datetime | None = None
+    remind_start: bool = True
+    remind_end: bool = False
 
+    # -- 提醒 -----------------------------------------------------------
     def reminder_at(self) -> datetime | None:
-        if not self.remind_enabled:
+        """开始提醒时刻（沿用「提前 N 分钟」规则）。"""
+        if not self.remind_start:
             return None
         return self.plan_at - timedelta(minutes=self.remind_lead_minutes)
+
+    def end_reminder_at(self) -> datetime | None:
+        """结束提醒时刻：正好是结束时间，不提前。"""
+        if self.end_at is None or not self.remind_end:
+            return None
+        return self.end_at
+
+    # -- 时间范围 -------------------------------------------------------
+    @property
+    def has_end(self) -> bool:
+        return self.end_at is not None
+
+    @property
+    def is_cross_day(self) -> bool:
+        return self.end_at is not None and self.end_at.date() != self.plan_at.date()
+
+    @property
+    def span_days(self) -> int:
+        end = self.end_at or self.plan_at
+        return max(1, (end.date() - self.plan_at.date()).days + 1)
+
+    def covered_dates(self) -> list[date]:
+        return covered_dates(self.plan_at, self.end_at)
+
+    @property
+    def range_text(self) -> str:
+        """列表 / 描述里显示的时间文本。"""
+        return plan_range_label(self.plan_at, self.end_at)
 
     @property
     def time_text(self) -> str:
@@ -110,16 +164,24 @@ class PlanTime:
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "PlanTime":
+        # 旧库可能还没有 remind_start / remind_end / end_at 列（或旧行里为 NULL）：
+        # 缺列时回退到旧的 remind_enabled，保证旧数据的提醒行为不变。
+        legacy_start = _row_flag(row, "remind_enabled", False)
+        start_enabled = _row_flag(row, "remind_start", legacy_start)
         return cls(
             id=row["id"],
             task_id=row["task_id"],
             plan_at=parse_dt(row["plan_at"]) or datetime.now(),
             label=row["label"] or "",
-            remind_enabled=bool(row["remind_enabled"]),
+            remind_enabled=start_enabled,
             remind_lead_minutes=int(row["remind_lead_minutes"]),
             done=bool(row["done"]),
             sort_order=int(row["sort_order"]),
+            end_at=parse_dt(_row_value(row, "end_at")),
+            remind_start=start_enabled,
+            remind_end=_row_flag(row, "remind_end", False),
         )
+
 
 
 # --------------------------------------------------------------------------
@@ -176,8 +238,33 @@ class Task:
     def group_hint(self) -> str:
         if len(self.plans) <= 1:
             return ""
-        parts = [f"{p.plan_at.strftime('%m-%d %H:%M')} {p.label}".strip() for p in self.sorted_plans()]
+        parts = []
+        for plan in self.sorted_plans():
+            if plan.end_at is None:
+                stamp = plan.plan_at.strftime("%m-%d %H:%M")
+            elif plan.is_cross_day:
+                stamp = plan.range_text
+            else:
+                stamp = f"{plan.plan_at.strftime('%m-%d')} {plan.range_text}"
+            parts.append(f"{stamp} {plan.label}".strip())
         return "本任务共 {} 个计划时间：\n".format(len(parts)) + "\n".join(f"· {item}" for item in parts)
+
+    def plan_covered_dates(self) -> list[date]:
+        """计划时间覆盖到的日期（跨天计划会包含中间每一天）。"""
+        days: list[date] = []
+        for plan in self.sorted_plans():
+            for day in plan.covered_dates():
+                if day not in days:
+                    days.append(day)
+        return days
+
+    def visible_dates(self) -> list[date]:
+        """任务在周视图里可能出现的全部日期，截止日期排在最前。"""
+        days = [self.due_at.date()]
+        for day in self.plan_covered_dates():
+            if day not in days:
+                days.append(day)
+        return days
 
     def search_blob(self) -> str:
         return " ".join(
@@ -269,7 +356,11 @@ class ReminderSpec:
 # --------------------------------------------------------------------------
 @dataclass
 class Occurrence:
-    """周视图里的一个时间块：可能属于计划时间，也可能是截止时间。"""
+    """周视图里的一个时间块：可能属于计划时间，也可能是截止时间。
+
+    ``end_at`` 为计划时间的真实结束时间（旧计划为 ``None``，仍按固定时长显示）。
+    跨天计划的结束时间可能落在后面的日期，周视图会按天裁剪成多段绘制。
+    """
 
     task_id: int
     title: str
@@ -280,6 +371,7 @@ class Occurrence:
     plan_index: int = 0
     plan_total: int = 0
     duration_minutes: int = 45
+    end_at: datetime | None = None
 
     @property
     def key(self) -> tuple[str, int, int]:
@@ -287,7 +379,20 @@ class Occurrence:
 
     @property
     def end(self) -> datetime:
+        if self.end_at is not None:
+            return self.end_at
         return self.start + timedelta(minutes=self.duration_minutes)
+
+    @property
+    def is_cross_day(self) -> bool:
+        return self.end_at is not None and self.end_at.date() != self.start.date()
+
+    @property
+    def span_days(self) -> int:
+        return max(1, (self.end.date() - self.start.date()).days + 1)
+
+    def covered_dates(self) -> list[date]:
+        return covered_dates(self.start, self.end_at)
 
     @property
     def is_done(self) -> bool:
@@ -301,11 +406,13 @@ class Occurrence:
     @property
     def detail_text(self) -> str:
         if self.kind == KIND_PLAN and self.plan is not None:
-            bits = [f"计划 {self.plan.plan_at.strftime('%H:%M')}"]
+            bits = [f"计划 {plan_range_label(self.plan.plan_at, self.plan.end_at)}"]
             if self.plan.label:
                 bits.append(self.plan.label)
-            if self.plan.remind_enabled:
-                bits.append(f"提前 {self.plan.remind_lead_minutes} 分钟提醒")
+            if self.plan.remind_start:
+                bits.append(f"开始前 {self.plan.remind_lead_minutes} 分钟提醒")
+            if self.plan.end_reminder_at() is not None:
+                bits.append("结束提醒")
             if self.plan_index:
                 bits.append(f"第 {self.plan_index}/{self.plan_total} 个计划时间")
             return " · ".join(bits)
@@ -320,9 +427,20 @@ class PlanDraft:
     id: int | None = None
     plan_at: datetime = field(default_factory=datetime.now)
     label: str = ""
-    remind_enabled: bool = False
+    remind_enabled: bool = False  # 旧字段：未显式给 remind_start 时作为开始提醒开关
     remind_lead_minutes: int = 10
     done: bool = False
+    end_at: datetime | None = None
+    # None 表示「调用方没指定」：回退到旧的 remind_enabled，保证旧代码的行为不变
+    remind_start: bool | None = None
+    remind_end: bool = False
+
+    @property
+    def start_reminder(self) -> bool:
+        """开始提醒开关（新代码优先用 remind_start，旧代码仍可用 remind_enabled）。"""
+        if self.remind_start is not None:
+            return bool(self.remind_start)
+        return bool(self.remind_enabled)
 
 
 @dataclass
@@ -365,9 +483,12 @@ class TaskDraft:
                     id=plan.id,
                     plan_at=plan.plan_at,
                     label=plan.label,
-                    remind_enabled=plan.remind_enabled,
+                    remind_enabled=plan.remind_start,
+                    remind_start=plan.remind_start,
                     remind_lead_minutes=plan.remind_lead_minutes,
                     done=plan.done,
+                    end_at=plan.end_at,
+                    remind_end=plan.remind_end,
                 )
                 for plan in task.sorted_plans()
             ],

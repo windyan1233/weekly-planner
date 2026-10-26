@@ -18,11 +18,18 @@ data class TaskEntity(
     val priority: String = "普通",
     val dueAt: Long? = null,
     val done: Boolean = false,
+    /** 截止是否提醒；默认开。 */
+    val remindDue: Boolean = true,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
 
-/** 计划时间：一个任务可以有多个，互相独立。 */
+/**
+ * 计划时间：一个任务可以有多个，互相独立。
+ *
+ * [planAt] 是开始时间；[endAt] 为空表示旧数据那种「只有时间点」的计划，
+ * 周视图里仍按 45 分钟的块显示。
+ */
 @Entity(
     tableName = "plan_times",
     foreignKeys = [
@@ -38,10 +45,15 @@ data class TaskEntity(
 data class PlanTimeEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val taskId: Long,
-    val planAt: Long
+    val planAt: Long,
+    val endAt: Long? = null,
+    /** 开始是否提醒；沿用设置里的提前分钟数。 */
+    val remindStart: Boolean = true,
+    /** 结束是否提醒；只有 [endAt] 不为空时才生效。 */
+    val remindEnd: Boolean = false
 )
 
-/** 提醒：每条任务最多一条截止提醒 + 每个计划时间一条。 */
+/** 提醒：每条任务最多一条截止提醒 + 每个计划时间一条开始提醒、一条结束提醒。 */
 @Entity(
     tableName = "reminders",
     indices = [
@@ -53,7 +65,7 @@ data class PlanTimeEntity(
 data class ReminderEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val taskId: Long,
-    /** due = 截止前一天；plan = 计划时间前 */
+    /** due = 截止前一天；plan = 计划时间前；plan_end = 计划结束时间 */
     val kind: String,
     /** 计划时间 id；截止提醒为 0 */
     val planKey: Long = 0L,
@@ -70,6 +82,7 @@ data class ReminderEntity(
         const val STATUS_MISSED = "missed"
         const val KIND_DUE = "due"
         const val KIND_PLAN = "plan"
+        const val KIND_PLAN_END = "plan_end"
     }
 }
 

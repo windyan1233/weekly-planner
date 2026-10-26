@@ -255,3 +255,31 @@ def month_day_label(value: datetime | date) -> str:
     if isinstance(value, datetime):
         value = value.date()
     return f"{value.month}月{value.day}日"
+
+
+# --------------------------------------------------------------------------
+# 计划时间（开始 / 结束）
+# --------------------------------------------------------------------------
+def plan_range_label(start: datetime, end: datetime | None = None) -> str:
+    """计划时间的显示文本（列表与任务描述共用）。
+
+    * 没有结束时间（旧数据）：``HH:mm``，保持原来的短格式；
+    * 同一天：``HH:mm-HH:mm``；
+    * 跨天：``MM-dd HH:mm → MM-dd HH:mm · 跨N天``（N = 覆盖的自然日天数）。
+    """
+    if end is None:
+        return start.strftime(TIME_FORMAT)
+    if end.date() == start.date():
+        return f"{start.strftime(TIME_FORMAT)}-{end.strftime(TIME_FORMAT)}"
+    span = (end.date() - start.date()).days + 1
+    return (
+        f"{start.strftime('%m-%d %H:%M')} → "
+        f"{end.strftime('%m-%d %H:%M')} · 跨{span}天"
+    )
+
+
+def covered_dates(start: datetime, end: datetime | None = None) -> list[date]:
+    """一个计划时间覆盖到的所有自然日（含开始与结束当天）。"""
+    if end is None or end.date() <= start.date():
+        return [start.date()]
+    return [start.date() + timedelta(days=offset) for offset in range((end.date() - start.date()).days + 1)]
