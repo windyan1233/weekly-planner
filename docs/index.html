@@ -142,6 +142,15 @@
     .mirror span { color: var(--muted); font-size: 12px; }
     .mirror .btn { margin-left: auto; }
     .mirror code { color: var(--green); }
+    .template {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+      margin-top: 14px; padding: 14px 16px;
+      border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+    }
+    .template strong { display: block; font-size: 14px; }
+    .template span { color: var(--muted); font-size: 12px; }
+    .template .btn { margin-left: 0; }
+    .template > div { flex: 1; min-width: 240px; }
     .pass-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
     .pass-label { font-size: 12px; color: var(--muted); }
     .pass-code {
@@ -311,6 +320,14 @@
       <div class="note">
         Windows 当前包未签名；已申请 SignPath Foundation 免费开源签名，通过后会发布新的签名版本。
         <a href="https://github.com/windyan1233/weekly-planner/blob/main/docs/DOWNLOAD.md">下载与校验说明</a>
+      </div>
+      <div class="template">
+        <div>
+          <strong>课表模板</strong>
+          <span>不确定课表格式时，先下载 Excel 模板，一行一门课填好再导入。</span>
+        </div>
+        <a class="btn primary" href="https://wwaxi.lanzoub.com/b01i5y69id" target="_blank" rel="noopener">蓝奏云下载</a>
+        <a class="btn" href="https://github.com/windyan1233/weekly-planner/releases/latest/download/weekly-planner-timetable-template.xlsx">GitHub 下载</a>
       </div>
     </section>
 
