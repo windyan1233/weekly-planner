@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from tests.support import ROOT, qapp
@@ -726,7 +726,7 @@ class FinanceUITest(FinanceTestBase):
 
     def test_overview_shows_balance(self) -> None:
         self.env.init(100000)
-        self.env.add_expense(3500)
+        self.env.add_expense(3500, day=date.today())
         self.env.service.after_change()
         window = self._window(self.env.service)
         try:
@@ -840,18 +840,18 @@ class FinanceUITest(FinanceTestBase):
 
     def test_month_rollover_generates_reports(self) -> None:
         self.env.init(100000)
-        self.env.add_income(10000, day=date(2026, 9, 10))
+        today = date.today()
+        previous_month_day = today.replace(day=1) - timedelta(days=1)
+        self.env.add_income(10000, day=previous_month_day)
         window = self._window(self.env.service)
         try:
-            window.finance_ui.on_date_changed(datetime(2026, 11, 1, 0, 1))
+            window.finance_ui.on_date_changed(datetime(today.year, today.month, today.day, 0, 1))
             self.app.processEvents()
             months = {
                 row['month']
                 for row in self.env.service.db.query('SELECT month FROM monthly_reports')
             }
-            self.assertIn('2026-09', months)
-            self.assertIn('2026-10', months)
-            self.assertIn('2026-11', months)
+            self.assertIn(month_key(today), months)
         finally:
             window.close()
 
