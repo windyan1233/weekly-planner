@@ -134,8 +134,11 @@ object TimetableParser {
             }
         }
         if (entries.isEmpty()) throw ParseError("没有解析出任何课程。")
+        // 一门课可能跨多个大节（例如实验 1-8 节），而它所在的单元格可能在
+        // 第一个大节就出现；等所有大节的 periodTimes 收集完后再统一重算。
+        val adjusted = applyTimes(entries, periodTimes)
         return ParseResult(
-            entries.sortedWith(compareBy({ it.weekday }, { it.startMinutes }, { it.name })),
+            adjusted.sortedWith(compareBy({ it.weekday }, { it.startMinutes }, { it.name })),
             warnings,
             hasTimetableTimes = hasTimetableTimes
         )
